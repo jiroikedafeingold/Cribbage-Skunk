@@ -39,18 +39,19 @@ enum SkunkLevel {
         case .double: return [Color(red: 1.0, green: 0.35, blue: 0.45), Color(red: 0.85, green: 0.20, blue: 0.65), Color(red: 0.45, green: 0.30, blue: 0.95)]
         }
     }
+
+    var rawKey: String {
+        switch self {
+        case .none: return "none"
+        case .single: return "single"
+        case .double: return "double"
+        }
+    }
 }
 
 // MARK: - Palette
 
 extension Color {
-    static let p1Primary = Color(red: 0.98, green: 0.45, blue: 0.28)   // warm coral
-    static let p1Deep    = Color(red: 0.78, green: 0.22, blue: 0.14)
-    static let p2Primary = Color(red: 0.32, green: 0.74, blue: 0.96)   // sky blue
-    static let p2Deep    = Color(red: 0.16, green: 0.45, blue: 0.78)
-    static let woodLight = Color(red: 0.63, green: 0.44, blue: 0.27)
-    static let woodMid   = Color(red: 0.48, green: 0.31, blue: 0.18)
-    static let woodDark  = Color(red: 0.30, green: 0.18, blue: 0.10)
     static let feltDark  = Color(red: 0.05, green: 0.13, blue: 0.10)
     static let feltMid   = Color(red: 0.09, green: 0.20, blue: 0.15)
     static let cribGold  = Color(red: 0.94, green: 0.79, blue: 0.45)
@@ -58,15 +59,82 @@ extension Color {
     static let skunkOrange = Color(red: 1.0, green: 0.70, blue: 0.30)
 }
 
+// MARK: - Player Themes
+
+struct PlayerTheme: Identifiable, Hashable {
+    let id: String
+    let displayName: String
+    let primary: Color
+    let deep: Color
+}
+
+let playerThemes: [PlayerTheme] = [
+    .init(id: "coral",  displayName: "Coral",
+          primary: Color(red: 0.98, green: 0.45, blue: 0.28),
+          deep:    Color(red: 0.78, green: 0.22, blue: 0.14)),
+    .init(id: "sky",    displayName: "Sky",
+          primary: Color(red: 0.32, green: 0.74, blue: 0.96),
+          deep:    Color(red: 0.16, green: 0.45, blue: 0.78)),
+    .init(id: "plum",   displayName: "Plum",
+          primary: Color(red: 0.68, green: 0.45, blue: 0.96),
+          deep:    Color(red: 0.42, green: 0.22, blue: 0.78)),
+    .init(id: "mint",   displayName: "Mint",
+          primary: Color(red: 0.40, green: 0.85, blue: 0.55),
+          deep:    Color(red: 0.18, green: 0.55, blue: 0.30)),
+    .init(id: "rose",   displayName: "Rose",
+          primary: Color(red: 0.98, green: 0.50, blue: 0.72),
+          deep:    Color(red: 0.75, green: 0.22, blue: 0.50)),
+    .init(id: "gold",   displayName: "Gold",
+          primary: Color(red: 0.96, green: 0.78, blue: 0.30),
+          deep:    Color(red: 0.72, green: 0.52, blue: 0.10)),
+    .init(id: "teal",   displayName: "Teal",
+          primary: Color(red: 0.25, green: 0.80, blue: 0.78),
+          deep:    Color(red: 0.10, green: 0.50, blue: 0.55)),
+    .init(id: "ivory",  displayName: "Ivory",
+          primary: Color(red: 0.94, green: 0.94, blue: 0.92),
+          deep:    Color(red: 0.55, green: 0.55, blue: 0.55)),
+]
+
+func playerTheme(for id: String) -> PlayerTheme {
+    playerThemes.first(where: { $0.id == id }) ?? playerThemes[0]
+}
+
 // MARK: - Root View
 
 struct ContentView: View {
-    @State private var p1Score: Int = 0
-    @State private var p2Score: Int = 0
+    // Persisted across launches
+    @AppStorage("p1Score") private var p1Score: Int = 0
+    @AppStorage("p2Score") private var p2Score: Int = 0
+    @AppStorage("p1Name") private var p1Name: String = "PLAYER ONE"
+    @AppStorage("p2Name") private var p2Name: String = "PLAYER TWO"
+    @AppStorage("p1ColorID") private var p1ColorID: String = "coral"
+    @AppStorage("p2ColorID") private var p2ColorID: String = "sky"
+    @AppStorage("winnerRaw") private var winnerRaw: String = ""
+    @AppStorage("skunkRaw") private var skunkRaw: String = "none"
+
+    // In-memory (undo only spans current session)
     @State private var p1History: [Int] = []
     @State private var p2History: [Int] = []
-    @State private var winner: CribbagePlayer?
-    @State private var skunk: SkunkLevel = .none
+    @State private var showSettings: Bool = false
+
+    private var p1Theme: PlayerTheme { playerTheme(for: p1ColorID) }
+    private var p2Theme: PlayerTheme { playerTheme(for: p2ColorID) }
+
+    private var winner: CribbagePlayer? {
+        switch winnerRaw {
+        case "one": return .one
+        case "two": return .two
+        default:    return nil
+        }
+    }
+
+    private var skunk: SkunkLevel {
+        switch skunkRaw {
+        case "single": return .single
+        case "double": return .double
+        default:       return .none
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -91,10 +159,10 @@ struct ContentView: View {
                 HStack(spacing: 0) {
                     // Player 1 — left side
                     PlayerPanel(
-                        title: "PLAYER ONE",
+                        title: p1Name,
                         score: p1Score,
-                        primary: .p1Primary,
-                        deep: .p1Deep,
+                        primary: p1Theme.primary,
+                        deep: p1Theme.deep,
                         disabled: winner != nil,
                         canUndo: !p1History.isEmpty,
                         onAdd: { amount in addPoints(amount, to: .one) },
@@ -105,16 +173,23 @@ struct ContentView: View {
                     .rotationEffect(.degrees(90))
                     .frame(width: panelW, height: h)
 
-                    CribbageBoardView(p1Score: p1Score, p2Score: p2Score)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.vertical, 8)
+                    CribbageBoardView(
+                        p1Score: p1Score,
+                        p2Score: p2Score,
+                        p1Name: p1Name,
+                        p2Name: p2Name,
+                        p1Theme: p1Theme,
+                        p2Theme: p2Theme
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.vertical, 8)
 
                     // Player 2 — right side
                     PlayerPanel(
-                        title: "PLAYER TWO",
+                        title: p2Name,
                         score: p2Score,
-                        primary: .p2Primary,
-                        deep: .p2Deep,
+                        primary: p2Theme.primary,
+                        deep: p2Theme.deep,
                         disabled: winner != nil,
                         canUndo: !p2History.isEmpty,
                         onAdd: { amount in addPoints(amount, to: .two) },
@@ -127,10 +202,32 @@ struct ContentView: View {
                 }
             }
 
+            // Settings entry point — small gear at top center
+            VStack {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .frame(width: 30, height: 30)
+                        .background(
+                            Circle()
+                                .fill(Color.black.opacity(0.35))
+                                .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 0.6))
+                        )
+                }
+                .padding(.top, 6)
+                Spacer()
+            }
+            .zIndex(5)
+
             if let winner {
                 WinnerOverlay(
                     winner: winner,
                     skunk: skunk,
+                    winnerTheme: winner == .one ? p1Theme : p2Theme,
+                    winnerName: winner == .one ? p1Name : p2Name,
                     onPlayAgain: {
                         withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
                             reset()
@@ -143,6 +240,19 @@ struct ContentView: View {
         }
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
+        .sheet(isPresented: $showSettings) {
+            SettingsSheet(
+                p1Name: $p1Name,
+                p2Name: $p2Name,
+                p1ColorID: $p1ColorID,
+                p2ColorID: $p2ColorID,
+                onResetScores: {
+                    reset()
+                    showSettings = false
+                },
+                onDismiss: { showSettings = false }
+            )
+        }
     }
 
     private func addPoints(_ amount: Int, to player: CribbagePlayer) {
@@ -155,8 +265,8 @@ struct ContentView: View {
                 p1Score += applied
                 p1History.append(applied)
                 if p1Score >= 121 {
-                    winner = .one
-                    skunk = computeSkunk(loserScore: p2Score)
+                    winnerRaw = "one"
+                    skunkRaw = computeSkunk(loserScore: p2Score).rawKey
                 }
             case .two:
                 let applied = min(121 - p2Score, amount)
@@ -164,8 +274,8 @@ struct ContentView: View {
                 p2Score += applied
                 p2History.append(applied)
                 if p2Score >= 121 {
-                    winner = .two
-                    skunk = computeSkunk(loserScore: p1Score)
+                    winnerRaw = "two"
+                    skunkRaw = computeSkunk(loserScore: p1Score).rawKey
                 }
             }
         }
@@ -196,8 +306,8 @@ struct ContentView: View {
         p2Score = 0
         p1History.removeAll()
         p2History.removeAll()
-        winner = nil
-        skunk = .none
+        winnerRaw = ""
+        skunkRaw = "none"
     }
 }
 
@@ -417,6 +527,10 @@ struct PointsSlider: View {
 struct CribbageBoardView: View {
     let p1Score: Int
     let p2Score: Int
+    let p1Name: String
+    let p2Name: String
+    let p1Theme: PlayerTheme
+    let p2Theme: PlayerTheme
 
     var body: some View {
         GeometryReader { geo in
@@ -445,19 +559,23 @@ struct CribbageBoardView: View {
                 VStack(spacing: 8) {
                     // Player name labels at the top of each track, rotated toward each player
                     HStack(spacing: trackSpacing) {
-                        Text("PLAYER ONE")
+                        Text(p1Name)
                             .font(.system(size: 11, weight: .black, design: .rounded))
                             .tracking(2.4)
-                            .foregroundStyle(Color.p1Primary.opacity(0.95))
-                            .shadow(color: Color.p1Primary.opacity(0.5), radius: 6)
+                            .foregroundStyle(p1Theme.primary.opacity(0.95))
+                            .shadow(color: p1Theme.primary.opacity(0.5), radius: 6)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .fixedSize()
                             .rotationEffect(.degrees(90))
                             .frame(width: 18, height: nameZoneH)
-                        Text("PLAYER TWO")
+                        Text(p2Name)
                             .font(.system(size: 11, weight: .black, design: .rounded))
                             .tracking(2.4)
-                            .foregroundStyle(Color.p2Primary.opacity(0.95))
-                            .shadow(color: Color.p2Primary.opacity(0.5), radius: 6)
+                            .foregroundStyle(p2Theme.primary.opacity(0.95))
+                            .shadow(color: p2Theme.primary.opacity(0.5), radius: 6)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .fixedSize()
                             .rotationEffect(.degrees(-90))
                             .frame(width: 18, height: nameZoneH)
@@ -495,8 +613,8 @@ struct CribbageBoardView: View {
                             PlayerTrack(
                                 score: p1Score,
                                 rotation: 90,
-                                color: .p1Primary,
-                                deep: .p1Deep,
+                                color: p1Theme.primary,
+                                deep: p1Theme.deep,
                                 trackHeight: trackH,
                                 pegSize: pegSize,
                                 scoreOnLeading: true
@@ -504,8 +622,8 @@ struct CribbageBoardView: View {
                             PlayerTrack(
                                 score: p2Score,
                                 rotation: -90,
-                                color: .p2Primary,
-                                deep: .p2Deep,
+                                color: p2Theme.primary,
+                                deep: p2Theme.deep,
                                 trackHeight: trackH,
                                 pegSize: pegSize,
                                 scoreOnLeading: false
@@ -619,6 +737,8 @@ struct SkunkMarker: View {
 struct WinnerOverlay: View {
     let winner: CribbagePlayer
     let skunk: SkunkLevel
+    let winnerTheme: PlayerTheme
+    let winnerName: String
     let onPlayAgain: () -> Void
 
     @State private var animateIn = false
@@ -626,11 +746,9 @@ struct WinnerOverlay: View {
     @State private var pulse = false
     @State private var faceAngle: Double = 90  // alternates between +90 (left player) and -90 (right player)
 
-    private var winnerColor: Color {
-        winner == .one ? .p1Primary : .p2Primary
-    }
+    private var winnerColor: Color { winnerTheme.primary }
     private var winnerLabel: String {
-        winner == .one ? "PLAYER ONE WINS" : "PLAYER TWO WINS"
+        "\(winnerName.uppercased()) WINS"
     }
 
     var body: some View {
@@ -959,6 +1077,130 @@ struct ConfettiBurst: View {
         case 1: Circle().fill(p.color)
         default: Capsule().fill(p.color)
         }
+    }
+}
+
+// MARK: - Settings
+
+struct SettingsSheet: View {
+    @Binding var p1Name: String
+    @Binding var p2Name: String
+    @Binding var p1ColorID: String
+    @Binding var p2ColorID: String
+    let onResetScores: () -> Void
+    let onDismiss: () -> Void
+
+    @State private var confirmReset: Bool = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    LabeledContent("Name") {
+                        TextField("Player One", text: $p1Name)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.words)
+                            .submitLabel(.done)
+                    }
+                    ColorSwatchRow(selection: $p1ColorID, opposing: p2ColorID)
+                } header: {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(playerTheme(for: p1ColorID).primary)
+                            .frame(width: 12, height: 12)
+                        Text("PLAYER ONE")
+                    }
+                }
+
+                Section {
+                    LabeledContent("Name") {
+                        TextField("Player Two", text: $p2Name)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.words)
+                            .submitLabel(.done)
+                    }
+                    ColorSwatchRow(selection: $p2ColorID, opposing: p1ColorID)
+                } header: {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(playerTheme(for: p2ColorID).primary)
+                            .frame(width: 12, height: 12)
+                        Text("PLAYER TWO")
+                    }
+                }
+
+                Section {
+                    Button(role: .destructive) {
+                        confirmReset = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "arrow.counterclockwise.circle")
+                            Text("Reset Scores")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", action: onDismiss).fontWeight(.semibold)
+                }
+            }
+            .confirmationDialog(
+                "Reset both scores to 0?",
+                isPresented: $confirmReset,
+                titleVisibility: .visible
+            ) {
+                Button("Reset", role: .destructive, action: onResetScores)
+                Button("Cancel", role: .cancel) {}
+            }
+        }
+    }
+}
+
+struct ColorSwatchRow: View {
+    @Binding var selection: String
+    let opposing: String  // disable picking the other player's color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Color")
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
+            HStack(spacing: 12) {
+                ForEach(playerThemes) { theme in
+                    Button {
+                        if theme.id != opposing {
+                            selection = theme.id
+                            let gen = UIImpactFeedbackGenerator(style: .light)
+                            gen.impactOccurred()
+                        }
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(theme.primary)
+                                .frame(width: 32, height: 32)
+                                .opacity(theme.id == opposing ? 0.25 : 1.0)
+                            if selection == theme.id {
+                                Circle()
+                                    .stroke(Color.primary, lineWidth: 2.5)
+                                    .frame(width: 38, height: 38)
+                            }
+                            if theme.id == opposing {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(theme.id == opposing)
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
