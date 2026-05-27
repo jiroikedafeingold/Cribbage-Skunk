@@ -202,7 +202,7 @@ struct ContentView: View {
                 }
             }
 
-            // Settings entry point — small gear at top center
+            // Settings entry point — small gear at top center, a comfortable distance from the board
             VStack {
                 Button {
                     showSettings = true
@@ -210,14 +210,14 @@ struct ContentView: View {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
-                        .frame(width: 30, height: 30)
+                        .frame(width: 32, height: 32)
                         .background(
                             Circle()
                                 .fill(Color.black.opacity(0.35))
                                 .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 0.6))
                         )
                 }
-                .padding(.top, 6)
+                .padding(.top, 28)
                 Spacer()
             }
             .zIndex(5)
@@ -532,6 +532,8 @@ struct CribbageBoardView: View {
     let p1Theme: PlayerTheme
     let p2Theme: PlayerTheme
 
+    @State private var symbolFaceAngle: Double = 90
+
     var body: some View {
         GeometryReader { geo in
             let padV: CGFloat = 16
@@ -589,14 +591,16 @@ struct CribbageBoardView: View {
                                 trackHeight: trackH,
                                 pegSize: pegSize,
                                 symbol: "🦨🦨",
-                                color: .skunkRed
+                                color: .skunkRed,
+                                symbolRotation: symbolFaceAngle
                             )
                             SkunkMarker(
                                 progress: 90.0 / 121.0,
                                 trackHeight: trackH,
                                 pegSize: pegSize,
                                 symbol: "🦨",
-                                color: .skunkOrange
+                                color: .skunkOrange,
+                                symbolRotation: symbolFaceAngle
                             )
                             SkunkMarker(
                                 progress: 1.0,
@@ -604,7 +608,8 @@ struct CribbageBoardView: View {
                                 pegSize: pegSize,
                                 symbol: "👑",
                                 color: .cribGold,
-                                isFinish: true
+                                isFinish: true,
+                                symbolRotation: symbolFaceAngle
                             )
                         }
                         .padding(.horizontal, padH)
@@ -633,6 +638,15 @@ struct CribbageBoardView: View {
                     .frame(height: trackH)
                 }
                 .padding(.vertical, padV)
+            }
+            .task {
+                // Periodically flip the board's symbols so they face each player in turn
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(3.5))
+                    withAnimation(.easeInOut(duration: 0.7)) {
+                        symbolFaceAngle = (symbolFaceAngle == 90) ? -90 : 90
+                    }
+                }
             }
         }
     }
@@ -707,6 +721,7 @@ struct SkunkMarker: View {
     let symbol: String
     let color: Color
     var isFinish: Bool = false
+    let symbolRotation: Double
 
     var body: some View {
         let usable = trackHeight - pegSize
@@ -723,9 +738,10 @@ struct SkunkMarker: View {
                 Text(symbol)
                     .font(.system(size: isFinish ? 30 : 24))
                     .shadow(color: .black.opacity(0.55), radius: 5, y: 2)
+                    .rotationEffect(.degrees(symbolRotation))
             }
-            .frame(height: 34)
-            .offset(y: -17)
+            .frame(height: 38)
+            .offset(y: -19)
 
             Spacer(minLength: 0)
         }
@@ -1090,6 +1106,9 @@ struct SettingsSheet: View {
     let onResetScores: () -> Void
     let onDismiss: () -> Void
 
+    // Local drafts so typing doesn't re-render the whole app on every keystroke
+    @State private var draftP1Name: String = ""
+    @State private var draftP2Name: String = ""
     @State private var confirmReset: Bool = false
 
     var body: some View {
@@ -1097,10 +1116,11 @@ struct SettingsSheet: View {
             Form {
                 Section {
                     LabeledContent("Name") {
-                        TextField("Player One", text: $p1Name)
+                        TextField("Player One", text: $draftP1Name)
                             .multilineTextAlignment(.trailing)
                             .textInputAutocapitalization(.words)
                             .submitLabel(.done)
+                            .onSubmit { commitNames() }
                     }
                     ColorSwatchRow(selection: $p1ColorID, opposing: p2ColorID)
                 } header: {
@@ -1114,10 +1134,11 @@ struct SettingsSheet: View {
 
                 Section {
                     LabeledContent("Name") {
-                        TextField("Player Two", text: $p2Name)
+                        TextField("Player Two", text: $draftP2Name)
                             .multilineTextAlignment(.trailing)
                             .textInputAutocapitalization(.words)
                             .submitLabel(.done)
+                            .onSubmit { commitNames() }
                     }
                     ColorSwatchRow(selection: $p2ColorID, opposing: p1ColorID)
                 } header: {
@@ -1144,7 +1165,11 @@ struct SettingsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: onDismiss).fontWeight(.semibold)
+                    Button("Done") {
+                        commitNames()
+                        onDismiss()
+                    }
+                    .fontWeight(.semibold)
                 }
             }
             .confirmationDialog(
@@ -1155,7 +1180,19 @@ struct SettingsSheet: View {
                 Button("Reset", role: .destructive, action: onResetScores)
                 Button("Cancel", role: .cancel) {}
             }
+            .onAppear {
+                draftP1Name = p1Name
+                draftP2Name = p2Name
+            }
+            .onDisappear { commitNames() }
         }
+    }
+
+    private func commitNames() {
+        let trimmedOne = draftP1Name.trimmingCharacters(in: .whitespaces)
+        let trimmedTwo = draftP2Name.trimmingCharacters(in: .whitespaces)
+        if !trimmedOne.isEmpty, trimmedOne != p1Name { p1Name = trimmedOne }
+        if !trimmedTwo.isEmpty, trimmedTwo != p2Name { p2Name = trimmedTwo }
     }
 }
 
