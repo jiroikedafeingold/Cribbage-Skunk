@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cribbage Skunk — Two-player cribbage scoring</title>
+  <meta name="description" content="A clean two-player cribbage scoring app for iPhone. Lay the phone between you, drag to score, and let the board peg itself.">
+  <meta name="theme-color" content="#0d1a14">
+
+  <meta property="og:title" content="Cribbage Skunk">
+  <meta property="og:description" content="Two-player cribbage scoring for the phone laid between you.">
+  <meta property="og:type" content="website">
+
+  <style>
+    :root {
+      --bg-deep:   #08130e;
+      --bg-felt:   #0d1a14;
+      --bg-mid:    #14261d;
+      --bg-card:   rgba(255, 255, 255, 0.04);
+      --bg-card-2: rgba(255, 255, 255, 0.06);
+      --border:    rgba(255, 255, 255, 0.10);
+      --text:      #f4f4f2;
+      --text-mute: rgba(244, 244, 242, 0.62);
+      --text-dim:  rgba(244, 244, 242, 0.42);
+      --coral:     #fa7347;
+      --coral-deep:#c73922;
+      --sky:       #52bdf5;
+      --sky-deep:  #2873c7;
+      --gold:      #f0c973;
+      --skunk-red: #f56652;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background:
+        radial-gradient(circle at 50% 0%, rgba(255,255,255,0.04), transparent 60%),
+        linear-gradient(180deg, var(--bg-felt) 0%, var(--bg-mid) 50%, var(--bg-felt) 100%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      line-height: 1.55;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--sky); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .wrap {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* HERO */
+    .hero {
+      text-align: center;
+      padding: 72px 0 48px;
+    }
+    .hero .marks {
+      font-size: 56px;
+      letter-spacing: 6px;
+      margin-bottom: 8px;
+      filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));
+    }
+    .hero h1 {
+      font-size: clamp(40px, 7vw, 64px);
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      margin: 0 0 14px;
+      background: linear-gradient(135deg, var(--coral) 0%, var(--gold) 50%, var(--sky) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .hero .tagline {
+      font-size: clamp(17px, 2vw, 20px);
+      color: var(--text-mute);
+      max-width: 520px;
+      margin: 0 auto 28px;
+    }
+    .hero .ctas {
+      display: inline-flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 22px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: 0.5px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .btn-primary {
+      color: #1a0f06;
+      background: linear-gradient(135deg, var(--gold), #c89940);
+      box-shadow: 0 6px 24px rgba(240, 201, 115, 0.25);
+    }
+    .btn-ghost {
+      color: var(--text);
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+
+    /* SECTION */
+    section {
+      padding: 56px 0;
+      border-top: 1px solid var(--border);
+    }
+    section:first-of-type { border-top: 0; }
+    section h2 {
+      font-size: clamp(26px, 4vw, 36px);
+      font-weight: 900;
+      letter-spacing: -0.01em;
+      margin: 0 0 8px;
+    }
+    section .lede {
+      color: var(--text-mute);
+      margin: 0 0 32px;
+      max-width: 640px;
+    }
+
+    /* FEATURES */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+    .feature {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 22px;
+    }
+    .feature .icon {
+      font-size: 26px;
+      margin-bottom: 10px;
+      display: block;
+    }
+    .feature h3 {
+      font-size: 17px;
+      font-weight: 800;
+      margin: 0 0 6px;
+      letter-spacing: 0.2px;
+    }
+    .feature p {
+      font-size: 14.5px;
+      color: var(--text-mute);
+      margin: 0;
+    }
+
+    /* HOW */
+    .how ol {
+      counter-reset: step;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 16px;
+    }
+    .how li {
+      counter-increment: step;
+      position: relative;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 20px 22px 20px 64px;
+    }
+    .how li::before {
+      content: counter(step);
+      position: absolute;
+      left: 18px;
+      top: 18px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--coral), var(--coral-deep));
+      color: #fff;
+      font-weight: 900;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 14px rgba(250, 115, 71, 0.35);
+    }
+    .how li h3 {
+      margin: 0 0 4px;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .how li p {
+      margin: 0;
+      color: var(--text-mute);
+      font-size: 14.5px;
+    }
+
+    /* PRIVACY */
+    .privacy-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 28px;
+    }
+    .privacy-card h3 {
+      font-size: 17px;
+      font-weight: 800;
+      margin: 24px 0 6px;
+      color: var(--gold);
+    }
+    .privacy-card h3:first-of-type { margin-top: 0; }
+    .privacy-card p, .privacy-card ul {
+      color: var(--text-mute);
+      font-size: 15px;
+      margin: 0 0 8px;
+    }
+    .privacy-card ul { padding-left: 22px; }
+    .privacy-card li { margin: 4px 0; }
+    .privacy-card .updated {
+      display: inline-block;
+      font-size: 12px;
+      color: var(--text-dim);
+      background: rgba(255,255,255,0.04);
+      padding: 4px 10px;
+      border-radius: 999px;
+      margin-bottom: 20px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    /* FOOTER */
+    footer {
+      padding: 40px 0 56px;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 13.5px;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--text-mute); }
+    footer .links {
+      display: inline-flex;
+      gap: 18px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    @media (max-width: 540px) {
+      .hero { padding: 56px 0 36px; }
+      section { padding: 44px 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <!-- HERO -->
+    <header class="hero">
+      <div class="marks">🦨 👑 🦨</div>
+      <h1>Cribbage Skunk</h1>
+      <p class="tagline">Two-player cribbage scoring for the phone laid between you.</p>
+      <div class="ctas">
+        <a class="btn btn-primary" href="#" aria-label="Download on the App Store (coming soon)">Coming to the App Store</a>
+        <a class="btn btn-ghost" href="https://github.com/jiroikedafeingold/Cribbage-Skunk">View on GitHub</a>
+      </div>
+    </header>
+
+    <!-- FEATURES -->
+    <section id="features">
+      <h2>Built for the table</h2>
+      <p class="lede">
+        Cribbage Skunk lives between two players. Each side of the screen belongs to one of you — controls rotated, score on the board, peg climbing toward 121.
+      </p>
+      <div class="features">
+        <div class="feature">
+          <span class="icon">🎯</span>
+          <h3>Drag-to-add scoring</h3>
+          <p>Drag the slider on your side. Release. The points commit, the slider snaps back, the peg climbs.</p>
+        </div>
+        <div class="feature">
+          <span class="icon">⚡</span>
+          <h3>Quick +1 for pegging</h3>
+          <p>Tap the +1 chip during pegging instead of fiddling with the slider for one point at a time.</p>
+        </div>
+        <div class="feature">
+          <span class="icon">↩️</span>
+          <h3>Per-player undo</h3>
+          <p>Miscount? Tap undo to pop the last add. Each player has their own history.</p>
+        </div>
+        <div class="feature">
+          <span class="icon">🦨</span>
+          <h3>Skunk &amp; double skunk</h3>
+          <p>The 60 and 90 lines are marked on the board. The celebration scales with the win — animated skunks, confetti, and escalating haptics.</p>
+        </div>
+        <div class="feature">
+          <span class="icon">👑</span>
+          <h3>Faces both players</h3>
+          <p>The board symbols and the winner card periodically rotate so both players get a clear, upright view.</p>
+        </div>
+        <div class="feature">
+          <span class="icon">🎨</span>
+          <h3>Names &amp; colors</h3>
+          <p>Pick a name and one of eight color themes per player. Customization persists across launches.</p>
+        </div>
+        <div class="feature">
+          <span class="icon">💾</span>
+          <h3>Never lose a game</h3>
+          <p>Scores survive force-quits and restarts. Pick up an in-progress game days later if you have to.</p>
+        </div>
+        <div class="feature">
+          <span class="icon">🚫</span>
+          <h3>No ads, no tracking</h3>
+          <p>No accounts, no analytics, no advertising. Nothing leaves your phone.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section id="how" class="how">
+      <h2>How it works</h2>
+      <p class="lede">No setup. No login. Just open the app and play.</p>
+      <ol>
+        <li>
+          <h3>Set the table</h3>
+          <p>Lay the phone flat between you and your opponent. Each player's panel faces the side they're sitting on.</p>
+        </li>
+        <li>
+          <h3>Deal a hand</h3>
+          <p>Play cribbage as you always do — pegging, the show, his nibs, all of it. Bring your own deck.</p>
+        </li>
+        <li>
+          <h3>Score on your side</h3>
+          <p>When you count up your hand, drag the slider on your side to the total and release. Your peg climbs.</p>
+        </li>
+        <li>
+          <h3>First to 121 wins</h3>
+          <p>Cross the line and the celebration fires. If your opponent didn't make it past 90, you skunked them. Past 60? Double skunk.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- PRIVACY POLICY -->
+    <section id="privacy">
+      <h2>Privacy Policy</h2>
+      <div class="privacy-card">
+        <span class="updated">Last updated · May 27, 2026</span>
+
+        <h3>The short version</h3>
+        <p>
+          Cribbage Skunk does not collect, transmit, or share any personal information.
+          The app does not use analytics, advertising, tracking, or third-party SDKs.
+          Everything you do in the app stays on your device.
+        </p>
+
+        <h3>What the app stores on your device</h3>
+        <p>
+          So your game survives closing the app, Cribbage Skunk saves the following
+          locally using iOS's standard preferences storage (UserDefaults):
+        </p>
+        <ul>
+          <li>Each player's current score</li>
+          <li>The current winner and skunk status (if a game has finished)</li>
+          <li>The names you set for each player</li>
+          <li>The color theme you chose for each player</li>
+        </ul>
+        <p>
+          This data never leaves your iPhone. It is not transmitted to us, to Apple
+          beyond what iOS does for normal app function, or to any third party.
+        </p>
+
+        <h3>What the app does not collect</h3>
+        <ul>
+          <li>No name, email address, or account information</li>
+          <li>No location data</li>
+          <li>No device identifiers used for tracking</li>
+          <li>No usage analytics or crash reporting beyond what the App Store itself may provide to Apple</li>
+          <li>No advertising identifiers</li>
+        </ul>
+
+        <h3>Third-party services</h3>
+        <p>
+          Cribbage Skunk does not integrate with any third-party services, SDKs, or
+          back-end servers. It runs entirely on your device.
+        </p>
+
+        <h3>Children's privacy</h3>
+        <p>
+          The app is suitable for all ages and does not knowingly collect personal
+          information from anyone, including children under 13.
+        </p>
+
+        <h3>Deleting your data</h3>
+        <p>
+          To remove all stored data — scores, names, color choices — uninstall the
+          app from your device. Deleting the app removes all local storage with it.
+          You can also use the "Reset Scores" button in the in-app settings sheet to
+          zero out an in-progress game without losing your player names or colors.
+        </p>
+
+        <h3>Changes to this policy</h3>
+        <p>
+          If this policy ever changes, the "Last updated" date above will be revised
+          and the new version will appear on this page.
+        </p>
+
+        <h3>Contact</h3>
+        <p>
+          Questions about this privacy policy can be sent to
+          <a href="mailto:jiro@feingold5.com">jiro@feingold5.com</a>.
+        </p>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer>
+      <div class="links">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#privacy">Privacy</a>
+        <a href="https://github.com/jiroikedafeingold/Cribbage-Skunk">GitHub</a>
+      </div>
+      <div>© 2026 Jiro Feingold · Bring your own deck.</div>
+    </footer>
+
+  </div>
+</body>
+</html>
