@@ -6,11 +6,170 @@
 //
 
 import SwiftUI
+import CoreHaptics
+
+// MARK: - Loser Symbols (configurable from settings)
+
+struct LoserSymbol: Identifiable, Hashable {
+    let id: String
+    let char: String
+    let displayName: String
+}
+
+let loserSymbols: [LoserSymbol] = [
+    .init(id: "skunk",   char: "🦨", displayName: "Skunk"),
+    .init(id: "poop",    char: "💩", displayName: "Poop"),
+    .init(id: "snail",   char: "🐌", displayName: "Snail"),
+    .init(id: "turtle",  char: "🐢", displayName: "Turtle"),
+    .init(id: "clown",   char: "🤡", displayName: "Clown"),
+    .init(id: "chicken", char: "🐔", displayName: "Chicken"),
+    .init(id: "frog",    char: "🐸", displayName: "Frog"),
+    .init(id: "rat",     char: "🐀", displayName: "Rat"),
+    .init(id: "pig",     char: "🐷", displayName: "Pig"),
+    .init(id: "monkey",  char: "🐵", displayName: "Monkey"),
+    .init(id: "alien",   char: "👽", displayName: "Alien"),
+    .init(id: "ogre",    char: "👹", displayName: "Ogre"),
+    .init(id: "ghost",   char: "👻", displayName: "Ghost"),
+    .init(id: "snake",   char: "🐍", displayName: "Snake"),
+    .init(id: "octopus", char: "🐙", displayName: "Octopus"),
+    .init(id: "lizard",  char: "🦎", displayName: "Lizard"),
+    .init(id: "worm",    char: "🪱", displayName: "Worm"),
+    .init(id: "crab",    char: "🦀", displayName: "Crab"),
+    .init(id: "dragon",  char: "🐉", displayName: "Dragon"),
+    .init(id: "rabbit",  char: "🐇", displayName: "Rabbit"),
+    .init(id: "mouse",   char: "🐭", displayName: "Mouse"),
+    .init(id: "panda",   char: "🐼", displayName: "Panda"),
+    .init(id: "shark",   char: "🦈", displayName: "Shark"),
+    .init(id: "duck",    char: "🦆", displayName: "Duck"),
+    .init(id: "owl",     char: "🦉", displayName: "Owl"),
+    .init(id: "tomato",  char: "🍅", displayName: "Tomato"),
+    .init(id: "skull",   char: "💀", displayName: "Skull"),
+]
+
+let randomSymbolID = "random"
+
+func resolvedLoserChar(id: String, sessionChar: String) -> String {
+    if id == randomSymbolID {
+        // Use the previously rolled session char (or default if empty)
+        return sessionChar.isEmpty ? "🦨" : sessionChar
+    }
+    return loserSymbols.first(where: { $0.id == id })?.char ?? "🦨"
+}
+
+func rollRandomLoserChar() -> String {
+    loserSymbols.randomElement()?.char ?? "🦨"
+}
+
+// MARK: - Haptics
+
+final class WinHaptics {
+    static let shared = WinHaptics()
+    private var engine: CHHapticEngine?
+
+    init() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
+        do {
+            engine = try CHHapticEngine()
+            try engine?.start()
+            engine?.resetHandler = { [weak self] in
+                try? self?.engine?.start()
+            }
+            engine?.stoppedHandler = { _ in }
+        } catch {
+            engine = nil
+        }
+    }
+
+    func play(skunk: SkunkLevel) {
+        guard let engine, CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
+            // Fallback for devices without Core Haptics
+            let n = UINotificationFeedbackGenerator()
+            n.notificationOccurred(.success)
+            return
+        }
+
+        let (duration, ramps): (Double, [(Double, Float)])
+        switch skunk {
+        case .none:
+            duration = 1.2
+            ramps = [(0.0, 0.55), (0.6, 0.85), (1.2, 0.0)]
+        case .single:
+            duration = 1.8
+            ramps = [(0.0, 0.7), (0.6, 0.95), (1.2, 1.0), (1.8, 0.0)]
+        case .double:
+            duration = 2.6
+            ramps = [(0.0, 0.7), (0.5, 0.9), (1.0, 1.0), (1.8, 1.0), (2.6, 0.0)]
+        }
+
+        var events: [CHHapticEvent] = []
+
+        // Long continuous rumble
+        let continuous = CHHapticEvent(
+            eventType: .hapticContinuous,
+            parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.95),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.45)
+            ],
+            relativeTime: 0,
+            duration: duration
+        )
+        events.append(continuous)
+
+        // Punctuating sharp transients on top of the continuous rumble
+        let beats: [Double]
+        switch skunk {
+        case .none:   beats = [0.0, 0.4, 0.9]
+        case .single: beats = [0.0, 0.3, 0.6, 1.0, 1.4]
+        case .double: beats = [0.0, 0.25, 0.5, 0.8, 1.1, 1.5, 1.9, 2.3]
+        }
+        for t in beats {
+            events.append(
+                CHHapticEvent(
+                    eventType: .hapticTransient,
+                    parameters: [
+                        CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0),
+                        CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.8)
+                    ],
+                    relativeTime: t
+                )
+            )
+        }
+
+        // Dynamic intensity ramp for the rumble
+        let intensityCurve = CHHapticParameterCurve(
+            parameterID: .hapticIntensityControl,
+            controlPoints: ramps.map { CHHapticParameterCurve.ControlPoint(relativeTime: $0.0, value: $0.1) },
+            relativeTime: 0
+        )
+
+        do {
+            let pattern = try CHHapticPattern(events: events, parameterCurves: [intensityCurve])
+            let player = try engine.makePlayer(with: pattern)
+            try engine.start()
+            try player.start(atTime: CHHapticTimeImmediate)
+        } catch {
+            let n = UINotificationFeedbackGenerator()
+            n.notificationOccurred(.success)
+        }
+    }
+}
 
 // MARK: - Game Model
 
 enum CribbagePlayer {
     case one, two
+
+    var key: String {
+        switch self {
+        case .one: return "one"
+        case .two: return "two"
+        }
+    }
+}
+
+struct ScoreMove: Codable, Hashable {
+    let player: String  // "one" or "two"
+    let amount: Int
 }
 
 enum SkunkLevel {
@@ -69,30 +228,42 @@ struct PlayerTheme: Identifiable, Hashable {
 }
 
 let playerThemes: [PlayerTheme] = [
-    .init(id: "coral",  displayName: "Coral",
-          primary: Color(red: 0.98, green: 0.45, blue: 0.28),
-          deep:    Color(red: 0.78, green: 0.22, blue: 0.14)),
-    .init(id: "sky",    displayName: "Sky",
-          primary: Color(red: 0.32, green: 0.74, blue: 0.96),
-          deep:    Color(red: 0.16, green: 0.45, blue: 0.78)),
-    .init(id: "plum",   displayName: "Plum",
-          primary: Color(red: 0.68, green: 0.45, blue: 0.96),
-          deep:    Color(red: 0.42, green: 0.22, blue: 0.78)),
-    .init(id: "mint",   displayName: "Mint",
-          primary: Color(red: 0.40, green: 0.85, blue: 0.55),
-          deep:    Color(red: 0.18, green: 0.55, blue: 0.30)),
-    .init(id: "rose",   displayName: "Rose",
-          primary: Color(red: 0.98, green: 0.50, blue: 0.72),
-          deep:    Color(red: 0.75, green: 0.22, blue: 0.50)),
-    .init(id: "gold",   displayName: "Gold",
-          primary: Color(red: 0.96, green: 0.78, blue: 0.30),
-          deep:    Color(red: 0.72, green: 0.52, blue: 0.10)),
-    .init(id: "teal",   displayName: "Teal",
-          primary: Color(red: 0.25, green: 0.80, blue: 0.78),
-          deep:    Color(red: 0.10, green: 0.50, blue: 0.55)),
-    .init(id: "ivory",  displayName: "Ivory",
-          primary: Color(red: 0.94, green: 0.94, blue: 0.92),
-          deep:    Color(red: 0.55, green: 0.55, blue: 0.55)),
+    .init(id: "crimson",   displayName: "Crimson",
+          primary: Color(red: 1.00, green: 0.18, blue: 0.28),
+          deep:    Color(red: 0.78, green: 0.06, blue: 0.14)),
+    .init(id: "coral",     displayName: "Coral",
+          primary: Color(red: 1.00, green: 0.50, blue: 0.30),
+          deep:    Color(red: 0.82, green: 0.30, blue: 0.10)),
+    .init(id: "tangerine", displayName: "Tangerine",
+          primary: Color(red: 1.00, green: 0.62, blue: 0.10),
+          deep:    Color(red: 0.85, green: 0.40, blue: 0.04)),
+    .init(id: "gold",      displayName: "Gold",
+          primary: Color(red: 1.00, green: 0.85, blue: 0.15),
+          deep:    Color(red: 0.78, green: 0.58, blue: 0.02)),
+    .init(id: "lime",      displayName: "Lime",
+          primary: Color(red: 0.55, green: 0.95, blue: 0.18),
+          deep:    Color(red: 0.30, green: 0.65, blue: 0.08)),
+    .init(id: "mint",      displayName: "Mint",
+          primary: Color(red: 0.16, green: 0.92, blue: 0.50),
+          deep:    Color(red: 0.05, green: 0.62, blue: 0.30)),
+    .init(id: "teal",      displayName: "Teal",
+          primary: Color(red: 0.10, green: 0.88, blue: 0.85),
+          deep:    Color(red: 0.02, green: 0.55, blue: 0.62)),
+    .init(id: "sky",       displayName: "Sky",
+          primary: Color(red: 0.18, green: 0.66, blue: 1.00),
+          deep:    Color(red: 0.06, green: 0.36, blue: 0.85)),
+    .init(id: "indigo",    displayName: "Indigo",
+          primary: Color(red: 0.40, green: 0.36, blue: 1.00),
+          deep:    Color(red: 0.20, green: 0.16, blue: 0.80)),
+    .init(id: "plum",      displayName: "Plum",
+          primary: Color(red: 0.78, green: 0.28, blue: 1.00),
+          deep:    Color(red: 0.55, green: 0.10, blue: 0.80)),
+    .init(id: "magenta",   displayName: "Magenta",
+          primary: Color(red: 1.00, green: 0.22, blue: 0.82),
+          deep:    Color(red: 0.78, green: 0.06, blue: 0.58)),
+    .init(id: "rose",      displayName: "Rose",
+          primary: Color(red: 1.00, green: 0.45, blue: 0.68),
+          deep:    Color(red: 0.82, green: 0.20, blue: 0.45)),
 ]
 
 func playerTheme(for id: String) -> PlayerTheme {
@@ -111,11 +282,37 @@ struct ContentView: View {
     @AppStorage("p2ColorID") private var p2ColorID: String = "sky"
     @AppStorage("winnerRaw") private var winnerRaw: String = ""
     @AppStorage("skunkRaw") private var skunkRaw: String = "none"
+    @AppStorage("movesData") private var movesData: String = "[]"
+    @AppStorage("p1Confirm") private var p1Confirm: Bool = false
+    @AppStorage("p2Confirm") private var p2Confirm: Bool = false
+    @AppStorage("loserSymbolID") private var loserSymbolID: String = "skunk"
+    @AppStorage("randomLoserChar") private var randomLoserChar: String = "🦨"
 
-    // In-memory (undo only spans current session)
-    @State private var p1History: [Int] = []
-    @State private var p2History: [Int] = []
+    // Session-only
     @State private var showSettings: Bool = false
+    @State private var isReplaying: Bool = false
+
+    private var loserChar: String {
+        resolvedLoserChar(id: loserSymbolID, sessionChar: randomLoserChar)
+    }
+
+    private var moves: [ScoreMove] {
+        guard let data = movesData.data(using: .utf8),
+              let arr = try? JSONDecoder().decode([ScoreMove].self, from: data)
+        else { return [] }
+        return arr
+    }
+
+    private func setMoves(_ newMoves: [ScoreMove]) {
+        if let data = try? JSONEncoder().encode(newMoves),
+           let str = String(data: data, encoding: .utf8) {
+            movesData = str
+        }
+    }
+
+    private func canUndo(_ player: CribbagePlayer) -> Bool {
+        moves.contains(where: { $0.player == player.key })
+    }
 
     private var p1Theme: PlayerTheme { playerTheme(for: p1ColorID) }
     private var p2Theme: PlayerTheme { playerTheme(for: p2ColorID) }
@@ -137,105 +334,70 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ZStack {
-            // Felt table background
-            LinearGradient(
-                colors: [.feltDark, .feltMid, .feltDark],
-                startPoint: .top, endPoint: .bottom
-            )
-            .ignoresSafeArea()
+        GeometryReader { rootGeo in
+            let landscape = rootGeo.size.width > rootGeo.size.height
 
-            RadialGradient(
-                colors: [Color.white.opacity(0.06), .clear],
-                center: .center, startRadius: 30, endRadius: 500
-            )
-            .ignoresSafeArea()
-            .blendMode(.plusLighter)
+            ZStack {
+                // Felt table background
+                LinearGradient(
+                    colors: [.feltDark, .feltMid, .feltDark],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .ignoresSafeArea()
 
-            GeometryReader { geo in
-                let panelW: CGFloat = 82
-                let h = geo.size.height
+                RadialGradient(
+                    colors: [Color.white.opacity(0.06), .clear],
+                    center: .center, startRadius: 30, endRadius: 500
+                )
+                .ignoresSafeArea()
+                .blendMode(.plusLighter)
 
-                HStack(spacing: 0) {
-                    // Player 1 — left side
-                    PlayerPanel(
-                        title: p1Name,
-                        score: p1Score,
-                        primary: p1Theme.primary,
-                        deep: p1Theme.deep,
-                        disabled: winner != nil,
-                        canUndo: !p1History.isEmpty,
-                        onAdd: { amount in addPoints(amount, to: .one) },
-                        onPlusOne: { addPoints(1, to: .one) },
-                        onUndo: { undo(.one) }
-                    )
-                    .frame(width: h, height: panelW)
-                    .rotationEffect(.degrees(90))
-                    .frame(width: panelW, height: h)
-
-                    CribbageBoardView(
-                        p1Score: p1Score,
-                        p2Score: p2Score,
-                        p1Name: p1Name,
-                        p2Name: p2Name,
-                        p1Theme: p1Theme,
-                        p2Theme: p2Theme
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.vertical, 8)
-
-                    // Player 2 — right side
-                    PlayerPanel(
-                        title: p2Name,
-                        score: p2Score,
-                        primary: p2Theme.primary,
-                        deep: p2Theme.deep,
-                        disabled: winner != nil,
-                        canUndo: !p2History.isEmpty,
-                        onAdd: { amount in addPoints(amount, to: .two) },
-                        onPlusOne: { addPoints(1, to: .two) },
-                        onUndo: { undo(.two) }
-                    )
-                    .frame(width: h, height: panelW)
-                    .rotationEffect(.degrees(-90))
-                    .frame(width: panelW, height: h)
+                Group {
+                    if landscape {
+                        landscapeLayout(height: rootGeo.size.height)
+                    } else {
+                        portraitLayout(height: rootGeo.size.height)
+                    }
                 }
-            }
 
-            // Settings entry point — small gear at top center, a comfortable distance from the board
-            VStack {
-                Button {
-                    showSettings = true
-                } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .frame(width: 32, height: 32)
-                        .background(
-                            Circle()
-                                .fill(Color.black.opacity(0.35))
-                                .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 0.6))
-                        )
-                }
-                .padding(.top, 28)
-                Spacer()
-            }
-            .zIndex(5)
-
-            if let winner {
-                WinnerOverlay(
-                    winner: winner,
-                    skunk: skunk,
-                    winnerTheme: winner == .one ? p1Theme : p2Theme,
-                    winnerName: winner == .one ? p1Name : p2Name,
-                    onPlayAgain: {
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
-                            reset()
+                // Settings entry point — positioned at the "0" end of the tracks, between the two pegs
+                Group {
+                    if landscape {
+                        // Tracks start at the left edge; both pegs sit at x=0 stacked vertically.
+                        // Place the gear at the left-center of the board, between them.
+                        HStack {
+                            settingsButton(large: true)
+                                .padding(.leading, 30)
+                            Spacer()
+                        }
+                    } else {
+                        // Tracks start at the bottom; both pegs sit at y=0 side by side.
+                        VStack {
+                            Spacer()
+                            settingsButton(large: false)
+                                .padding(.bottom, 18)
                         }
                     }
-                )
-                .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                .zIndex(10)
+                }
+                .zIndex(5)
+
+                if let winner, !isReplaying {
+                    WinnerOverlay(
+                        winner: winner,
+                        skunk: skunk,
+                        winnerTheme: winner == .one ? p1Theme : p2Theme,
+                        winnerName: winner == .one ? p1Name : p2Name,
+                        loserChar: loserChar,
+                        landscape: landscape,
+                        onPlayAgain: {
+                            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                                reset()
+                            }
+                        }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                    .zIndex(10)
+                }
             }
         }
         .preferredColorScheme(.dark)
@@ -246,6 +408,10 @@ struct ContentView: View {
                 p2Name: $p2Name,
                 p1ColorID: $p1ColorID,
                 p2ColorID: $p2ColorID,
+                p1Confirm: $p1Confirm,
+                p2Confirm: $p2Confirm,
+                loserSymbolID: $loserSymbolID,
+                randomLoserChar: $randomLoserChar,
                 onResetScores: {
                     reset()
                     showSettings = false
@@ -255,44 +421,207 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Layouts
+
+    private func settingsButton(large: Bool) -> some View {
+        let iconSize: CGFloat = large ? 28 : 14
+        let frameSize: CGFloat = large ? 60 : 32
+        return Button {
+            showSettings = true
+        } label: {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: iconSize, weight: .medium))
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(width: frameSize, height: frameSize)
+                .background(
+                    Circle()
+                        .fill(Color.black.opacity(0.35))
+                        .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 0.6))
+                )
+        }
+    }
+
+    @ViewBuilder
+    private func portraitLayout(height: CGFloat) -> some View {
+        let panelW: CGFloat = 82
+        HStack(spacing: 0) {
+            // Player 1 — left side
+            PlayerPanel(
+                title: p1Name,
+                score: p1Score,
+                primary: p1Theme.primary,
+                deep: p1Theme.deep,
+                disabled: winner != nil || isReplaying,
+                canUndo: canUndo(.one),
+                requireConfirm: p1Confirm,
+                onAdd: { amount in addPoints(amount, to: .one) },
+                onPlusOne: { addPoints(1, to: .one) },
+                onUndo: { undo(.one) }
+            )
+            .frame(width: height, height: panelW)
+            .rotationEffect(.degrees(90))
+            .frame(width: panelW, height: height)
+
+            CribbageBoardView(
+                p1Score: p1Score,
+                p2Score: p2Score,
+                p1Theme: p1Theme,
+                p2Theme: p2Theme,
+                loserChar: loserChar
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 8)
+
+            // Player 2 — right side
+            PlayerPanel(
+                title: p2Name,
+                score: p2Score,
+                primary: p2Theme.primary,
+                deep: p2Theme.deep,
+                disabled: winner != nil || isReplaying,
+                canUndo: canUndo(.two),
+                requireConfirm: p2Confirm,
+                onAdd: { amount in addPoints(amount, to: .two) },
+                onPlusOne: { addPoints(1, to: .two) },
+                onUndo: { undo(.two) }
+            )
+            .frame(width: height, height: panelW)
+            .rotationEffect(.degrees(-90))
+            .frame(width: panelW, height: height)
+        }
+    }
+
+    @ViewBuilder
+    private func landscapeLayout(height: CGFloat) -> some View {
+        // Player panels sized as a portion of the screen height for tablet-friendly tap targets
+        let panelH: CGFloat = max(110, min(150, height * 0.16))
+        VStack(spacing: 8) {
+            // Player 2 — top edge, rotated 180° to face the player sitting at the top
+            PlayerPanel(
+                title: p2Name,
+                score: p2Score,
+                primary: p2Theme.primary,
+                deep: p2Theme.deep,
+                disabled: winner != nil || isReplaying,
+                canUndo: canUndo(.two),
+                requireConfirm: p2Confirm,
+                onAdd: { amount in addPoints(amount, to: .two) },
+                onPlusOne: { addPoints(1, to: .two) },
+                onUndo: { undo(.two) }
+            )
+            .frame(height: panelH)
+            .rotationEffect(.degrees(180))
+
+            HorizontalCribbageBoardView(
+                p1Score: p1Score,
+                p2Score: p2Score,
+                p1Theme: p1Theme,
+                p2Theme: p2Theme,
+                loserChar: loserChar
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 24)
+
+            // Player 1 — bottom edge, normal orientation
+            PlayerPanel(
+                title: p1Name,
+                score: p1Score,
+                primary: p1Theme.primary,
+                deep: p1Theme.deep,
+                disabled: winner != nil || isReplaying,
+                canUndo: canUndo(.one),
+                requireConfirm: p1Confirm,
+                onAdd: { amount in addPoints(amount, to: .one) },
+                onPlusOne: { addPoints(1, to: .one) },
+                onUndo: { undo(.one) }
+            )
+            .frame(height: panelH)
+        }
+    }
+
+    // MARK: - Game state mutations
+
     private func addPoints(_ amount: Int, to player: CribbagePlayer) {
-        guard winner == nil, amount > 0 else { return }
+        guard winner == nil, !isReplaying, amount > 0 else { return }
+
+        // Compute how much we can actually apply (capped at 121).
+        let applied: Int
+        switch player {
+        case .one: applied = min(121 - p1Score, amount)
+        case .two: applied = min(121 - p2Score, amount)
+        }
+        guard applied > 0 else { return }
+
+        // Apply the score and record the move
         withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
             switch player {
-            case .one:
-                let applied = min(121 - p1Score, amount)
-                guard applied > 0 else { return }
-                p1Score += applied
-                p1History.append(applied)
-                if p1Score >= 121 {
-                    winnerRaw = "one"
-                    skunkRaw = computeSkunk(loserScore: p2Score).rawKey
-                }
-            case .two:
-                let applied = min(121 - p2Score, amount)
-                guard applied > 0 else { return }
-                p2Score += applied
-                p2History.append(applied)
-                if p2Score >= 121 {
-                    winnerRaw = "two"
-                    skunkRaw = computeSkunk(loserScore: p1Score).rawKey
-                }
+            case .one: p1Score += applied
+            case .two: p2Score += applied
             }
+        }
+        var current = moves
+        current.append(ScoreMove(player: player.key, amount: applied))
+        setMoves(current)
+
+        // Win check
+        let didWin = (player == .one ? p1Score : p2Score) >= 121
+        if didWin {
+            let loserScore = player == .one ? p2Score : p1Score
+            winnerRaw = player.key
+            skunkRaw = computeSkunk(loserScore: loserScore).rawKey
+
+            // Replay the entire game on the board before showing the winner card
+            Task { await runReplay() }
         }
     }
 
     private func undo(_ player: CribbagePlayer) {
-        guard winner == nil else { return }
+        guard winner == nil, !isReplaying else { return }
+        var current = moves
+        guard let idx = current.lastIndex(where: { $0.player == player.key }) else { return }
+        let removed = current.remove(at: idx)
+        setMoves(current)
         withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
             switch player {
-            case .one:
-                guard let last = p1History.popLast() else { return }
-                p1Score = max(0, p1Score - last)
-            case .two:
-                guard let last = p2History.popLast() else { return }
-                p2Score = max(0, p2Score - last)
+            case .one: p1Score = max(0, p1Score - removed.amount)
+            case .two: p2Score = max(0, p2Score - removed.amount)
             }
         }
+    }
+
+    private func runReplay() async {
+        isReplaying = true
+        // Let the player see the winning peg position for a beat
+        try? await Task.sleep(for: .milliseconds(750))
+
+        let snapshot = moves
+
+        // Reset pegs to 0 — the replay starts from the opening hand
+        withAnimation(.easeInOut(duration: 0.45)) {
+            p1Score = 0
+            p2Score = 0
+        }
+        try? await Task.sleep(for: .milliseconds(550))
+
+        let tick = UIImpactFeedbackGenerator(style: .light)
+        tick.prepare()
+
+        for move in snapshot {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) {
+                if move.player == "one" {
+                    p1Score = min(121, p1Score + move.amount)
+                } else {
+                    p2Score = min(121, p2Score + move.amount)
+                }
+            }
+            tick.impactOccurred(intensity: 0.55)
+            tick.prepare()
+            try? await Task.sleep(for: .milliseconds(180))
+        }
+
+        // Pause on the final position before the celebration takes over
+        try? await Task.sleep(for: .milliseconds(700))
+        isReplaying = false
     }
 
     private func computeSkunk(loserScore: Int) -> SkunkLevel {
@@ -304,10 +633,12 @@ struct ContentView: View {
     private func reset() {
         p1Score = 0
         p2Score = 0
-        p1History.removeAll()
-        p2History.removeAll()
         winnerRaw = ""
         skunkRaw = "none"
+        setMoves([])
+        if loserSymbolID == randomSymbolID {
+            randomLoserChar = rollRandomLoserChar()
+        }
     }
 }
 
@@ -320,86 +651,129 @@ struct PlayerPanel: View {
     let deep: Color
     let disabled: Bool
     let canUndo: Bool
+    let requireConfirm: Bool
     let onAdd: (Int) -> Void
     let onPlusOne: () -> Void
     let onUndo: () -> Void
 
     @State private var pending: Int = 0
+    @State private var sliderIsDragging: Bool = false
+
+    // True when the slider has settled on a value and we're waiting for the user to confirm it.
+    private var awaitingConfirm: Bool {
+        requireConfirm && pending > 0 && !sliderIsDragging
+    }
+
+    // The number rendered on the combined left button.
+    private var displayValue: Int {
+        if sliderIsDragging || awaitingConfirm { return pending }
+        return 1
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Name
-            Text(title)
-                .font(.system(size: 11, weight: .black, design: .rounded))
-                .tracking(2.4)
-                .foregroundStyle(.white.opacity(0.65))
-                .fixedSize()
+        ZStack {
+            // Translucent watermark of the player's name behind the controls
+            Text(title.uppercased())
+                .font(.system(size: 110, weight: .black, design: .rounded))
+                .tracking(10)
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
+                .foregroundStyle(primary.opacity(0.42))
+                .shadow(color: primary.opacity(0.55), radius: 14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
 
-            // +N pending pill
-            Text("+\(pending)")
-                .font(.system(size: 20, weight: .black, design: .rounded))
-                .foregroundStyle(
-                    LinearGradient(colors: [primary, deep], startPoint: .top, endPoint: .bottom)
-                )
-                .monospacedDigit()
-                .contentTransition(.numericText(value: Double(pending)))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule()
-                        .fill(primary.opacity(0.16))
-                        .overlay(Capsule().stroke(primary.opacity(0.5), lineWidth: 1))
-                )
-                .fixedSize()
+            HStack(spacing: 12) {
+                // Combined +1 / +N display button (on the left)
+                Button {
+                    if awaitingConfirm {
+                        let value = pending
+                        onAdd(value)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { pending = 0 }
+                        let gen = UIImpactFeedbackGenerator(style: .medium)
+                        gen.impactOccurred()
+                    } else if !sliderIsDragging {
+                        onPlusOne()
+                        let gen = UIImpactFeedbackGenerator(style: .light)
+                        gen.impactOccurred()
+                    }
+                } label: {
+                    Text("+\(displayValue)")
+                        .font(.system(size: 22, weight: .black, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(colors: [primary, deep], startPoint: .top, endPoint: .bottom)
+                        )
+                        .monospacedDigit()
+                        .contentTransition(.numericText(value: Double(displayValue)))
+                        .frame(minWidth: 56, minHeight: 44)
+                        .padding(.horizontal, 8)
+                        .background(
+                            Capsule()
+                                .fill(primary.opacity(awaitingConfirm ? 0.28 : 0.16))
+                                .overlay(
+                                    Capsule().stroke(
+                                        primary.opacity(awaitingConfirm ? 0.95 : 0.55),
+                                        lineWidth: awaitingConfirm ? 1.6 : 1
+                                    )
+                                )
+                        )
+                        .scaleEffect(awaitingConfirm ? 1.05 : 1.0)
+                        .shadow(color: primary.opacity(awaitingConfirm ? 0.5 : 0.0), radius: 8)
+                        .animation(.easeInOut(duration: 0.2), value: awaitingConfirm)
+                }
+                .buttonStyle(.plain)
+                .disabled(disabled || sliderIsDragging)
+                .opacity(disabled ? 0.4 : 1.0)
 
-            // Slider (flex)
-            PointsSlider(value: $pending, primary: primary, deep: deep) { amount in
-                onAdd(amount)
+                // Slider (flex)
+                PointsSlider(
+                    value: $pending,
+                    isDragging: $sliderIsDragging,
+                    primary: primary,
+                    deep: deep
+                ) { committed in
+                    if !requireConfirm {
+                        // Auto-commit and reset
+                        onAdd(committed)
+                        let gen = UIImpactFeedbackGenerator(style: .medium)
+                        gen.impactOccurred()
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                            pending = 0
+                        }
+                    }
+                    // In confirm mode, keep `pending` set; the left button becomes the commit
+                }
+                .frame(height: 44)
+                .disabled(disabled)
+                .opacity(disabled ? 0.4 : 1.0)
+
+                // Undo (also clears any pending confirmation)
+                Button {
+                    if pending > 0 {
+                        // Cancel a pending confirmation instead of undoing the last move
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { pending = 0 }
+                    } else {
+                        onUndo()
+                    }
+                    let gen = UIImpactFeedbackGenerator(style: .light)
+                    gen.impactOccurred()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 13, weight: .black))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 38, height: 38)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.08))
+                                .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
+                        )
+                }
+                .disabled((!canUndo && pending == 0) || disabled)
+                .opacity(((!canUndo && pending == 0) || disabled) ? 0.30 : 1.0)
             }
-            .frame(height: 40)
-            .disabled(disabled)
-            .opacity(disabled ? 0.4 : 1.0)
-
-            // +1
-            Button {
-                onPlusOne()
-                let gen = UIImpactFeedbackGenerator(style: .light)
-                gen.impactOccurred()
-            } label: {
-                Text("+1")
-                    .font(.system(size: 14, weight: .black, design: .rounded))
-                    .foregroundStyle(primary)
-                    .frame(width: 38, height: 38)
-                    .background(
-                        Circle()
-                            .fill(primary.opacity(0.16))
-                            .overlay(Circle().stroke(primary.opacity(0.55), lineWidth: 1))
-                    )
-            }
-            .disabled(disabled)
-            .opacity(disabled ? 0.35 : 1.0)
-
-            // Undo
-            Button {
-                onUndo()
-                let gen = UIImpactFeedbackGenerator(style: .light)
-                gen.impactOccurred()
-            } label: {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 13, weight: .black))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(width: 38, height: 38)
-                    .background(
-                        Circle()
-                            .fill(Color.white.opacity(0.08))
-                            .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
-                    )
-            }
-            .disabled(!canUndo || disabled)
-            .opacity((!canUndo || disabled) ? 0.30 : 1.0)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(
@@ -414,6 +788,7 @@ struct PlayerPanel: View {
                 )
                 .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(.horizontal, 8)
     }
 }
@@ -422,14 +797,18 @@ struct PlayerPanel: View {
 
 struct PointsSlider: View {
     @Binding var value: Int
+    @Binding var isDragging: Bool
     let primary: Color
     let deep: Color
     let onCommit: (Int) -> Void
 
-    @State private var isDragging: Bool = false
     @State private var tickHaptic = UIImpactFeedbackGenerator(style: .light)
+    @State private var stableValue: Int = 0
+    @State private var lastChangeTime: Date = .distantPast
 
     private let maxValue = 29
+    private let twitchWindow: TimeInterval = 0.08   // ignore changes this close to release
+    private let stabilityDwell: TimeInterval = 0.12  // a value held this long counts as "stable"
 
     var body: some View {
         GeometryReader { geo in
@@ -494,26 +873,38 @@ struct PointsSlider: View {
                         if !isDragging {
                             isDragging = true
                             tickHaptic.prepare()
+                            stableValue = value
+                            lastChangeTime = Date()
                         }
                         let x = max(0, min(usable, g.location.x - knobSize / 2))
                         let p = x / max(usable, 1)
                         let newValue = Int((p * CGFloat(maxValue)).rounded())
                         if newValue != value {
+                            let now = Date()
+                            // If the previous value was held long enough, lock it in as stable
+                            if now.timeIntervalSince(lastChangeTime) >= stabilityDwell {
+                                stableValue = value
+                            }
                             value = newValue
+                            lastChangeTime = now
                             tickHaptic.impactOccurred(intensity: 0.75)
                             tickHaptic.prepare()
                         }
                     }
                     .onEnded { _ in
+                        // Twitch protection: if the value changed in the last fraction of a
+                        // second before release, prefer the previous stable value.
+                        let dwell = Date().timeIntervalSince(lastChangeTime)
+                        let committed: Int = (dwell < twitchWindow) ? stableValue : value
                         isDragging = false
-                        let committed = value
+
+                        if committed != value {
+                            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                                value = committed
+                            }
+                        }
                         if committed > 0 {
                             onCommit(committed)
-                            let gen = UIImpactFeedbackGenerator(style: .medium)
-                            gen.impactOccurred()
-                            withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) {
-                                value = 0
-                            }
                         }
                     }
             )
@@ -527,21 +918,21 @@ struct PointsSlider: View {
 struct CribbageBoardView: View {
     let p1Score: Int
     let p2Score: Int
-    let p1Name: String
-    let p2Name: String
     let p1Theme: PlayerTheme
     let p2Theme: PlayerTheme
+    let loserChar: String
 
     @State private var symbolFaceAngle: Double = 90
+
+    private var doubleLoser: String { loserChar + loserChar }
 
     var body: some View {
         GeometryReader { geo in
             let padV: CGFloat = 16
             let padH: CGFloat = 12
-            let nameZoneH: CGFloat = 88
             let pegSize: CGFloat = 22
             let trackSpacing: CGFloat = 64
-            let trackH = geo.size.height - padV * 2 - nameZoneH - 8
+            let trackH = geo.size.height - padV * 2
 
             ZStack {
                 // Lighter board surface for stronger skunk contrast
@@ -558,84 +949,56 @@ struct CribbageBoardView: View {
                     )
                     .shadow(color: .black.opacity(0.40), radius: 18, y: 8)
 
-                VStack(spacing: 8) {
-                    // Player name labels at the top of each track, rotated toward each player
+                ZStack {
+                    Group {
+                        SkunkMarker(
+                            progress: 60.0 / 121.0,
+                            trackHeight: trackH,
+                            pegSize: pegSize,
+                            symbol: doubleLoser,
+                            color: .skunkRed,
+                            symbolRotation: symbolFaceAngle
+                        )
+                        SkunkMarker(
+                            progress: 90.0 / 121.0,
+                            trackHeight: trackH,
+                            pegSize: pegSize,
+                            symbol: loserChar,
+                            color: .skunkOrange,
+                            symbolRotation: symbolFaceAngle
+                        )
+                        SkunkMarker(
+                            progress: 1.0,
+                            trackHeight: trackH,
+                            pegSize: pegSize,
+                            symbol: "👑",
+                            color: .cribGold,
+                            isFinish: true,
+                            symbolRotation: symbolFaceAngle
+                        )
+                    }
+                    .padding(.horizontal, padH)
+
                     HStack(spacing: trackSpacing) {
-                        Text(p1Name)
-                            .font(.system(size: 11, weight: .black, design: .rounded))
-                            .tracking(2.4)
-                            .foregroundStyle(p1Theme.primary.opacity(0.95))
-                            .shadow(color: p1Theme.primary.opacity(0.5), radius: 6)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .fixedSize()
-                            .rotationEffect(.degrees(90))
-                            .frame(width: 18, height: nameZoneH)
-                        Text(p2Name)
-                            .font(.system(size: 11, weight: .black, design: .rounded))
-                            .tracking(2.4)
-                            .foregroundStyle(p2Theme.primary.opacity(0.95))
-                            .shadow(color: p2Theme.primary.opacity(0.5), radius: 6)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .fixedSize()
-                            .rotationEffect(.degrees(-90))
-                            .frame(width: 18, height: nameZoneH)
+                        PlayerTrack(
+                            score: p1Score,
+                            rotation: 90,
+                            color: p1Theme.primary,
+                            deep: p1Theme.deep,
+                            trackHeight: trackH,
+                            pegSize: pegSize,
+                            scoreOnLeading: true
+                        )
+                        PlayerTrack(
+                            score: p2Score,
+                            rotation: -90,
+                            color: p2Theme.primary,
+                            deep: p2Theme.deep,
+                            trackHeight: trackH,
+                            pegSize: pegSize,
+                            scoreOnLeading: false
+                        )
                     }
-
-                    // Tracks + skunk markers
-                    ZStack {
-                        Group {
-                            SkunkMarker(
-                                progress: 60.0 / 121.0,
-                                trackHeight: trackH,
-                                pegSize: pegSize,
-                                symbol: "🦨🦨",
-                                color: .skunkRed,
-                                symbolRotation: symbolFaceAngle
-                            )
-                            SkunkMarker(
-                                progress: 90.0 / 121.0,
-                                trackHeight: trackH,
-                                pegSize: pegSize,
-                                symbol: "🦨",
-                                color: .skunkOrange,
-                                symbolRotation: symbolFaceAngle
-                            )
-                            SkunkMarker(
-                                progress: 1.0,
-                                trackHeight: trackH,
-                                pegSize: pegSize,
-                                symbol: "👑",
-                                color: .cribGold,
-                                isFinish: true,
-                                symbolRotation: symbolFaceAngle
-                            )
-                        }
-                        .padding(.horizontal, padH)
-
-                        HStack(spacing: trackSpacing) {
-                            PlayerTrack(
-                                score: p1Score,
-                                rotation: 90,
-                                color: p1Theme.primary,
-                                deep: p1Theme.deep,
-                                trackHeight: trackH,
-                                pegSize: pegSize,
-                                scoreOnLeading: true
-                            )
-                            PlayerTrack(
-                                score: p2Score,
-                                rotation: -90,
-                                color: p2Theme.primary,
-                                deep: p2Theme.deep,
-                                trackHeight: trackH,
-                                pegSize: pegSize,
-                                scoreOnLeading: false
-                            )
-                        }
-                    }
-                    .frame(height: trackH)
                 }
                 .padding(.vertical, padV)
             }
@@ -748,6 +1111,219 @@ struct SkunkMarker: View {
     }
 }
 
+// MARK: - Horizontal Cribbage Board (iPad landscape)
+
+struct HorizontalCribbageBoardView: View {
+    let p1Score: Int
+    let p2Score: Int
+    let p1Theme: PlayerTheme
+    let p2Theme: PlayerTheme
+    let loserChar: String
+
+    @State private var symbolFaceAngle: Double = 0  // 0 = bottom player, 180 = top player
+
+    private var doubleLoser: String { loserChar + loserChar }
+
+    var body: some View {
+        GeometryReader { geo in
+            let padH: CGFloat = 48
+            let padV: CGFloat = 28
+            let pegSize: CGFloat = 36
+            let scoreFontSize: CGFloat = 64
+            let scoreOffset: CGFloat = 72
+            let symbolFontSize: CGFloat = 68
+            let crownFontSize: CGFloat = 80
+            let trackW = geo.size.width - padH * 2
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(white: 0.32), Color(white: 0.20)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 36, style: .continuous)
+                            .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.40), radius: 18, y: 8)
+
+                ZStack {
+                    Group {
+                        HorizontalSkunkMarker(
+                            progress: 60.0 / 121.0,
+                            trackWidth: trackW,
+                            pegSize: pegSize,
+                            symbol: doubleLoser,
+                            color: .skunkRed,
+                            symbolFontSize: symbolFontSize,
+                            symbolRotation: symbolFaceAngle
+                        )
+                        HorizontalSkunkMarker(
+                            progress: 90.0 / 121.0,
+                            trackWidth: trackW,
+                            pegSize: pegSize,
+                            symbol: loserChar,
+                            color: .skunkOrange,
+                            symbolFontSize: symbolFontSize,
+                            symbolRotation: symbolFaceAngle
+                        )
+                        HorizontalSkunkMarker(
+                            progress: 1.0,
+                            trackWidth: trackW,
+                            pegSize: pegSize,
+                            symbol: "👑",
+                            color: .cribGold,
+                            isFinish: true,
+                            symbolFontSize: crownFontSize,
+                            symbolRotation: symbolFaceAngle
+                        )
+                    }
+                    .padding(.vertical, padV)
+
+                    // Player 2 on top, Player 1 on bottom — pushed apart with Spacer so they
+                    // use the board's full vertical extent proportionally.
+                    VStack(spacing: 0) {
+                        HorizontalPlayerTrack(
+                            score: p2Score,
+                            rotation: 180,
+                            color: p2Theme.primary,
+                            deep: p2Theme.deep,
+                            trackWidth: trackW,
+                            pegSize: pegSize,
+                            scoreFontSize: scoreFontSize,
+                            scoreOffset: scoreOffset,
+                            scoreAbove: false
+                        )
+                        Spacer(minLength: scoreOffset * 2 + pegSize)
+                        HorizontalPlayerTrack(
+                            score: p1Score,
+                            rotation: 0,
+                            color: p1Theme.primary,
+                            deep: p1Theme.deep,
+                            trackWidth: trackW,
+                            pegSize: pegSize,
+                            scoreFontSize: scoreFontSize,
+                            scoreOffset: scoreOffset,
+                            scoreAbove: true
+                        )
+                    }
+                    .padding(.vertical, padV)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, padH)
+            }
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(3.5))
+                    withAnimation(.easeInOut(duration: 0.7)) {
+                        symbolFaceAngle = (symbolFaceAngle == 0) ? 180 : 0
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct HorizontalPlayerTrack: View {
+    let score: Int
+    let rotation: Double
+    let color: Color
+    let deep: Color
+    let trackWidth: CGFloat
+    let pegSize: CGFloat
+    let scoreFontSize: CGFloat
+    let scoreOffset: CGFloat
+    let scoreAbove: Bool
+
+    var body: some View {
+        let progress = CGFloat(min(score, 121)) / 121.0
+        let usable = trackWidth - pegSize
+        let trackThickness: CGFloat = max(8, pegSize * 0.22)
+
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(Color.white.opacity(0.10))
+                .frame(width: trackWidth, height: trackThickness)
+
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [deep, color],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                )
+                .frame(width: max(0, progress * usable + pegSize / 2), height: trackThickness)
+                .shadow(color: color.opacity(0.55), radius: 8)
+
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.35))
+                    .frame(width: pegSize + 20, height: pegSize + 20)
+                    .blur(radius: 10)
+                Circle()
+                    .fill(color)
+                    .frame(width: pegSize, height: pegSize)
+                Circle()
+                    .stroke(Color.white.opacity(0.95), lineWidth: 2.5)
+                    .frame(width: pegSize, height: pegSize)
+
+                Text("\(score)")
+                    .font(.system(size: scoreFontSize, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .contentTransition(.numericText(value: Double(score)))
+                    .shadow(color: color.opacity(0.85), radius: 12)
+                    .shadow(color: .black.opacity(0.65), radius: 6)
+                    .fixedSize()
+                    .rotationEffect(.degrees(rotation))
+                    .offset(y: scoreAbove ? -scoreOffset : scoreOffset)
+            }
+            .frame(width: pegSize, height: pegSize)
+            .offset(x: progress * usable)
+            .animation(.spring(response: 0.5, dampingFraction: 0.72), value: score)
+        }
+        .frame(width: trackWidth, height: pegSize)
+    }
+}
+
+struct HorizontalSkunkMarker: View {
+    let progress: CGFloat
+    let trackWidth: CGFloat
+    let pegSize: CGFloat
+    let symbol: String
+    let color: Color
+    var isFinish: Bool = false
+    let symbolFontSize: CGFloat
+    let symbolRotation: Double
+
+    var body: some View {
+        let usable = trackWidth - pegSize
+        let xFromLeading = pegSize / 2 + progress * usable
+        let cellWidth: CGFloat = symbolFontSize + 24
+
+        HStack(spacing: 0) {
+            Spacer().frame(width: xFromLeading)
+
+            ZStack {
+                Rectangle()
+                    .fill(color.opacity(isFinish ? 0.85 : 0.55))
+                    .frame(width: isFinish ? 3 : 1.5)
+
+                Text(symbol)
+                    .font(.system(size: symbolFontSize))
+                    .shadow(color: .black.opacity(0.55), radius: 8, y: 3)
+                    .rotationEffect(.degrees(symbolRotation))
+            }
+            .frame(width: cellWidth)
+            .offset(x: -cellWidth / 2)
+
+            Spacer(minLength: 0)
+        }
+    }
+}
+
 // MARK: - Winner Overlay
 
 struct WinnerOverlay: View {
@@ -755,12 +1331,30 @@ struct WinnerOverlay: View {
     let skunk: SkunkLevel
     let winnerTheme: PlayerTheme
     let winnerName: String
+    let loserChar: String
+    let landscape: Bool
     let onPlayAgain: () -> Void
 
     @State private var animateIn = false
     @State private var rotate = false
     @State private var pulse = false
-    @State private var faceAngle: Double = 90  // alternates between +90 (left player) and -90 (right player)
+    @State private var faceAngle: Double = 0  // initialized in .onAppear to face the winner first
+
+    // The two angles the card flips between, given the current layout.
+    private var winnerAngle: Double {
+        if landscape {
+            return (winner == .one) ? 0 : 180     // P1 on bottom (0°), P2 on top (180°)
+        } else {
+            return (winner == .one) ? 90 : -90    // P1 on left (+90°), P2 on right (-90°)
+        }
+    }
+    private var loserAngle: Double {
+        if landscape {
+            return (winner == .one) ? 180 : 0
+        } else {
+            return (winner == .one) ? -90 : 90
+        }
+    }
 
     private var winnerColor: Color { winnerTheme.primary }
     private var winnerLabel: String {
@@ -914,18 +1508,20 @@ struct WinnerOverlay: View {
             .animation(.easeInOut(duration: 0.85), value: faceAngle)
         }
         .onAppear {
+            // Start facing the player who actually won, then flip back and forth from there.
+            faceAngle = winnerAngle
             withAnimation(.spring(response: 0.6, dampingFraction: 0.7)) {
                 animateIn = true
             }
             rotate = true
             pulse = true
-            playHaptics()
+            WinHaptics.shared.play(skunk: skunk)
         }
         .task {
             // Periodically flip the card so it faces each player in turn
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
-                faceAngle = (faceAngle == 90) ? -90 : 90
+                faceAngle = (faceAngle == winnerAngle) ? loserAngle : winnerAngle
             }
         }
     }
@@ -946,76 +1542,23 @@ struct WinnerOverlay: View {
                 .rotationEffect(.degrees(rotate ? 6 : -6))
                 .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: rotate)
         case .single:
-            Text("🦨")
+            Text(loserChar)
                 .font(.system(size: 132))
                 .shadow(color: .black.opacity(0.55), radius: 14, y: 6)
                 .rotationEffect(.degrees(rotate ? 10 : -10))
                 .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true), value: rotate)
         case .double:
             HStack(spacing: -18) {
-                Text("🦨")
+                Text(loserChar)
                     .font(.system(size: 110))
                     .shadow(color: .black.opacity(0.55), radius: 12, y: 6)
                     .rotationEffect(.degrees(rotate ? -18 : -8))
                     .animation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true), value: rotate)
-                Text("🦨")
+                Text(loserChar)
                     .font(.system(size: 110))
                     .shadow(color: .black.opacity(0.55), radius: 12, y: 6)
                     .rotationEffect(.degrees(rotate ? 18 : 8))
                     .animation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true), value: rotate)
-            }
-        }
-    }
-
-    private func playHaptics() {
-        switch skunk {
-        case .none:
-            Task {
-                let impact = UIImpactFeedbackGenerator(style: .heavy)
-                impact.impactOccurred()
-                try? await Task.sleep(for: .milliseconds(140))
-                impact.impactOccurred()
-                try? await Task.sleep(for: .milliseconds(220))
-                let notif = UINotificationFeedbackGenerator()
-                notif.notificationOccurred(.success)
-            }
-        case .single:
-            Task {
-                let heavy = UIImpactFeedbackGenerator(style: .heavy)
-                let rigid = UIImpactFeedbackGenerator(style: .rigid)
-                heavy.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(110))
-                heavy.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(160))
-                rigid.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(260))
-                heavy.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(380))
-                let notif = UINotificationFeedbackGenerator()
-                notif.notificationOccurred(.success)
-            }
-        case .double:
-            Task {
-                let heavy = UIImpactFeedbackGenerator(style: .heavy)
-                let rigid = UIImpactFeedbackGenerator(style: .rigid)
-                heavy.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(90))
-                rigid.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(110))
-                heavy.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(130))
-                rigid.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(150))
-                heavy.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(180))
-                rigid.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(240))
-                heavy.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(320))
-                heavy.impactOccurred(intensity: 1.0)
-                try? await Task.sleep(for: .milliseconds(450))
-                let notif = UINotificationFeedbackGenerator()
-                notif.notificationOccurred(.success)
             }
         }
     }
@@ -1103,6 +1646,10 @@ struct SettingsSheet: View {
     @Binding var p2Name: String
     @Binding var p1ColorID: String
     @Binding var p2ColorID: String
+    @Binding var p1Confirm: Bool
+    @Binding var p2Confirm: Bool
+    @Binding var loserSymbolID: String
+    @Binding var randomLoserChar: String
     let onResetScores: () -> Void
     let onDismiss: () -> Void
 
@@ -1123,6 +1670,7 @@ struct SettingsSheet: View {
                             .onSubmit { commitNames() }
                     }
                     ColorSwatchRow(selection: $p1ColorID, opposing: p2ColorID)
+                    Toggle("Confirm score after release", isOn: $p1Confirm)
                 } header: {
                     HStack(spacing: 8) {
                         Circle()
@@ -1141,6 +1689,7 @@ struct SettingsSheet: View {
                             .onSubmit { commitNames() }
                     }
                     ColorSwatchRow(selection: $p2ColorID, opposing: p1ColorID)
+                    Toggle("Confirm score after release", isOn: $p2Confirm)
                 } header: {
                     HStack(spacing: 8) {
                         Circle()
@@ -1148,6 +1697,17 @@ struct SettingsSheet: View {
                             .frame(width: 12, height: 12)
                         Text("PLAYER TWO")
                     }
+                }
+
+                Section {
+                    LoserSymbolPicker(
+                        selection: $loserSymbolID,
+                        randomChar: $randomLoserChar
+                    )
+                } header: {
+                    Text("LOSER SYMBOL")
+                } footer: {
+                    Text("Shown on the board at the skunk lines and in the celebration. \"Random\" picks a fresh icon each time you Reset Scores.")
                 }
 
                 Section {
@@ -1205,39 +1765,91 @@ struct ColorSwatchRow: View {
             Text("Color")
                 .foregroundStyle(.secondary)
                 .font(.subheadline)
-            HStack(spacing: 12) {
-                ForEach(playerThemes) { theme in
-                    Button {
-                        if theme.id != opposing {
-                            selection = theme.id
-                            let gen = UIImpactFeedbackGenerator(style: .light)
-                            gen.impactOccurred()
-                        }
-                    } label: {
-                        ZStack {
-                            Circle()
-                                .fill(theme.primary)
-                                .frame(width: 32, height: 32)
-                                .opacity(theme.id == opposing ? 0.25 : 1.0)
-                            if selection == theme.id {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(playerThemes) { theme in
+                        Button {
+                            if theme.id != opposing {
+                                selection = theme.id
+                                let gen = UIImpactFeedbackGenerator(style: .light)
+                                gen.impactOccurred()
+                            }
+                        } label: {
+                            ZStack {
                                 Circle()
-                                    .stroke(Color.primary, lineWidth: 2.5)
-                                    .frame(width: 38, height: 38)
+                                    .fill(theme.primary)
+                                    .frame(width: 32, height: 32)
+                                    .opacity(theme.id == opposing ? 0.25 : 1.0)
+                                if selection == theme.id {
+                                    Circle()
+                                        .stroke(Color.primary, lineWidth: 2.5)
+                                        .frame(width: 38, height: 38)
+                                }
+                                if theme.id == opposing {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-                            if theme.id == opposing {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.secondary)
-                            }
+                            .frame(width: 40, height: 40)
                         }
-                        .frame(width: 40, height: 40)
+                        .buttonStyle(.plain)
+                        .disabled(theme.id == opposing)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(theme.id == opposing)
                 }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 2)
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct LoserSymbolPicker: View {
+    @Binding var selection: String
+    @Binding var randomChar: String
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                symbolCell(id: randomSymbolID, char: "🎲", label: "Random")
+                ForEach(loserSymbols) { sym in
+                    symbolCell(id: sym.id, char: sym.char, label: sym.displayName)
+                }
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func symbolCell(id: String, char: String, label: String) -> some View {
+        let isSelected = selection == id
+        return Button {
+            selection = id
+            if id == randomSymbolID {
+                randomChar = rollRandomLoserChar()
+            }
+            let gen = UIImpactFeedbackGenerator(style: .light)
+            gen.impactOccurred()
+        } label: {
+            VStack(spacing: 4) {
+                Text(char)
+                    .font(.system(size: 30))
+                    .frame(width: 52, height: 52)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.secondary.opacity(isSelected ? 0.22 : 0.10))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.primary.opacity(isSelected ? 0.9 : 0.0), lineWidth: 2)
+                            )
+                    )
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 
