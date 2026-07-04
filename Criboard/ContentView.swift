@@ -287,6 +287,7 @@ struct ContentView: View {
     @AppStorage("p2Confirm") private var p2Confirm: Bool = false
     @AppStorage("loserSymbolID") private var loserSymbolID: String = "skunk"
     @AppStorage("randomLoserChar") private var randomLoserChar: String = "🦨"
+    @AppStorage("replayMoves") private var replayMoves: Bool = true
 
     // Session-only
     @State private var showSettings: Bool = false
@@ -412,6 +413,7 @@ struct ContentView: View {
                 p2Confirm: $p2Confirm,
                 loserSymbolID: $loserSymbolID,
                 randomLoserChar: $randomLoserChar,
+                replayMoves: $replayMoves,
                 onResetScores: {
                     reset()
                     showSettings = false
@@ -571,7 +573,9 @@ struct ContentView: View {
             skunkRaw = computeSkunk(loserScore: loserScore).rawKey
 
             // Replay the entire game on the board before showing the winner card
-            Task { await runReplay() }
+            if replayMoves {
+                Task { await runReplay() }
+            }
         }
     }
 
@@ -659,6 +663,13 @@ struct PlayerPanel: View {
     @State private var pending: Int = 0
     @State private var sliderIsDragging: Bool = false
 
+    // Rapid, repeated +1 taps accumulate into a visible running count.
+    @State private var tapStreak: Int = 0
+    @State private var streakResetTask: Task<Void, Never>? = nil
+
+    // Drives the slow, refined "breathing" glow while a number is on show.
+    @State private var glowPulse: Bool = false
+
     // True when the slider has settled on a value and we're waiting for the user to confirm it.
     private var awaitingConfirm: Bool {
         requireConfirm && pending > 0 && !sliderIsDragging
@@ -667,7 +678,30 @@ struct PlayerPanel: View {
     // The number rendered on the combined left button.
     private var displayValue: Int {
         if sliderIsDragging || awaitingConfirm { return pending }
+        if tapStreak > 1 { return tapStreak }
         return 1
+    }
+
+    // The button reads bright/high-contrast whenever it shows anything but "+1".
+    private var showingElevatedValue: Bool { displayValue != 1 }
+    // Identical high-contrast treatment during the drag and in the settled state
+    // that shows a number, so the look never shifts between the two.
+    private var highlighted: Bool { showingElevatedValue || awaitingConfirm }
+
+    // Track rapid +1 taps: each tap within a second of the last keeps the streak
+    // climbing; a pause longer than a second resets the display back to "+1".
+    private func registerSequentialTap() {
+        streakResetTask?.cancel()
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
+            tapStreak += 1
+        }
+        streakResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
+                tapStreak = 0
+            }
+        }
     }
 
     var body: some View {
@@ -694,6 +728,7 @@ struct PlayerPanel: View {
                         gen.impactOccurred()
                     } else if !sliderIsDragging {
                         onPlusOne()
+                        registerSequentialTap()
                         let gen = UIImpactFeedbackGenerator(style: .light)
                         gen.impactOccurred()
                     }
@@ -701,7 +736,9 @@ struct PlayerPanel: View {
                     Text("+\(displayValue)")
                         .font(.system(size: 22, weight: .black, design: .rounded))
                         .foregroundStyle(
-                            LinearGradient(colors: [primary, deep], startPoint: .top, endPoint: .bottom)
+                            highlighted
+                            ? AnyShapeStyle(.white)
+                            : AnyShapeStyle(LinearGradient(colors: [primary, deep], startPoint: .top, endPoint: .bottom))
                         )
                         .monospacedDigit()
                         .contentTransition(.numericText(value: Double(displayValue)))
@@ -709,20 +746,40 @@ struct PlayerPanel: View {
                         .padding(.horizontal, 8)
                         .background(
                             Capsule()
-                                .fill(primary.opacity(awaitingConfirm ? 0.28 : 0.16))
+                                .fill(primary.opacity(highlighted ? 0.42 : 0.16))
                                 .overlay(
                                     Capsule().stroke(
-                                        primary.opacity(awaitingConfirm ? 0.95 : 0.55),
-                                        lineWidth: awaitingConfirm ? 1.6 : 1
+                                        primary.opacity(highlighted ? 0.95 : 0.55),
+                                        lineWidth: highlighted ? 1.6 : 1
                                     )
                                 )
                         )
-                        .scaleEffect(awaitingConfirm ? 1.05 : 1.0)
-                        .shadow(color: primary.opacity(awaitingConfirm ? 0.5 : 0.0), radius: 8)
-                        .animation(.easeInOut(duration: 0.2), value: awaitingConfirm)
+                        .scaleEffect(highlighted ? 1.05 : 1.0)
+                        // Tight base halo whenever the button is lit, plus a slow,
+                        // refined "breathing" bloom while a number is on show.
+                        .shadow(color: primary.opacity(highlighted ? 0.75 : 0.0), radius: 10)
+                        .shadow(
+                            color: primary.opacity(showingElevatedValue ? (glowPulse ? 0.9 : 0.35) : 0.0),
+                            radius: showingElevatedValue ? (glowPulse ? 24 : 12) : 0
+                        )
+                        .animation(.easeInOut(duration: 0.22), value: highlighted)
+                        .onChange(of: showingElevatedValue) { _, isShowing in
+                            if isShowing {
+                                withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                                    glowPulse = true
+                                }
+                            } else {
+                                withAnimation(.easeInOut(duration: 0.5)) {
+                                    glowPulse = false
+                                }
+                            }
+                        }
                 }
                 .buttonStyle(.plain)
-                .disabled(disabled || sliderIsDragging)
+                // Only disabled for real (game over) — NOT during a drag, so the
+                // number keeps full brightness. Mid-drag taps are already ignored
+                // by the action's `!sliderIsDragging` guard.
+                .disabled(disabled)
                 .opacity(disabled ? 0.4 : 1.0)
 
                 // Slider (flex)
@@ -1650,6 +1707,7 @@ struct SettingsSheet: View {
     @Binding var p2Confirm: Bool
     @Binding var loserSymbolID: String
     @Binding var randomLoserChar: String
+    @Binding var replayMoves: Bool
     let onResetScores: () -> Void
     let onDismiss: () -> Void
 
@@ -1708,6 +1766,14 @@ struct SettingsSheet: View {
                     Text("LOSER SYMBOL")
                 } footer: {
                     Text("Shown on the board at the skunk lines and in the celebration. \"Random\" picks a fresh icon each time you Reset Scores.")
+                }
+
+                Section {
+                    Toggle("Replay moves after a win", isOn: $replayMoves)
+                } header: {
+                    Text("END OF GAME")
+                } footer: {
+                    Text("When on, the board re-pegs the whole game before the winner card appears.")
                 }
 
                 Section {
