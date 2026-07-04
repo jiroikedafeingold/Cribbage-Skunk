@@ -154,6 +154,98 @@ final class WinHaptics {
     }
 }
 
+// MARK: - Drag Tick Haptics
+
+/// Per-step feedback for the points slider. Uses Core Haptics so the tick can
+/// scale in strength as the number climbs — starting on a firm floor and, at the
+/// top, stacking a deep low-sharpness transient so it punches past the ceiling of
+/// a single UIKit impact. Falls back to escalating UIImpactFeedbackGenerators.
+final class DragTickHaptics {
+    static let shared = DragTickHaptics()
+
+    private let supportsHaptics = CHHapticEngine.capabilitiesForHardware().supportsHaptics
+    private var engine: CHHapticEngine?
+
+    private let fallbackMedium = UIImpactFeedbackGenerator(style: .medium)
+    private let fallbackHeavy = UIImpactFeedbackGenerator(style: .heavy)
+    private let fallbackRigid = UIImpactFeedbackGenerator(style: .rigid)
+
+    init() {
+        guard supportsHaptics else { return }
+        do {
+            engine = try CHHapticEngine()
+            try engine?.start()
+            engine?.resetHandler = { [weak self] in try? self?.engine?.start() }
+            engine?.stoppedHandler = { _ in }
+        } catch {
+            engine = nil
+        }
+    }
+
+    func prepare() {
+        fallbackMedium.prepare(); fallbackHeavy.prepare(); fallbackRigid.prepare()
+        try? engine?.start()
+    }
+
+    /// - Parameter progress: 0...1 position of the value along the track.
+    func tick(progress: Double) {
+        let p = min(1, max(0, progress))
+
+        guard supportsHaptics, let engine else {
+            fallbackTick(p)
+            return
+        }
+
+        // Firm floor (0.85) rising to full; sharpness climbs so high numbers bite.
+        let intensity = Float(0.85 + 0.15 * p)
+        let sharpness = Float(0.4 + 0.6 * p)
+        var events: [CHHapticEvent] = [
+            CHHapticEvent(
+                eventType: .hapticTransient,
+                parameters: [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness)
+                ],
+                relativeTime: 0
+            )
+        ]
+        if p >= 0.85 {
+            // A deep, full-body thump stacked on the sharp tick — reads as "over 1.0".
+            events.append(
+                CHHapticEvent(
+                    eventType: .hapticTransient,
+                    parameters: [
+                        CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0),
+                        CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.1)
+                    ],
+                    relativeTime: 0
+                )
+            )
+        }
+        do {
+            let pattern = try CHHapticPattern(events: events, parameters: [])
+            let player = try engine.makePlayer(with: pattern)
+            try player.start(atTime: CHHapticTimeImmediate)
+        } catch {
+            fallbackTick(p)
+        }
+    }
+
+    private func fallbackTick(_ p: Double) {
+        if p >= 0.85 {
+            fallbackHeavy.impactOccurred(intensity: 1.0)
+            fallbackRigid.impactOccurred(intensity: 1.0)
+            fallbackHeavy.prepare(); fallbackRigid.prepare()
+        } else if p >= 0.5 {
+            fallbackHeavy.impactOccurred(intensity: CGFloat(0.85 + 0.15 * p))
+            fallbackHeavy.prepare()
+        } else {
+            fallbackMedium.impactOccurred(intensity: CGFloat(0.85 + 0.15 * p))
+            fallbackMedium.prepare()
+        }
+    }
+}
+
 // MARK: - Game Model
 
 enum CribbagePlayer {
@@ -696,7 +788,7 @@ struct PlayerPanel: View {
             tapStreak += 1
         }
         streakResetTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
             withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
                 tapStreak = 0
@@ -859,14 +951,9 @@ struct PointsSlider: View {
     let deep: Color
     let onCommit: (Int) -> Void
 
-    @State private var tickHaptic = UIImpactFeedbackGenerator(style: .light)
-    @State private var stableValue: Int = 0
-    @State private var lastChangeTime: Date = .distantPast
+    @State private var dragStartValue: Int = 0
 
     private let maxValue = 29
-    private let twitchWindow: TimeInterval = 0.08   // ignore changes this close to release
-    private let stabilityDwell: TimeInterval = 0.12  // a value held this long counts as "stable"
-    private let twitchTolerance = 2  // steps of last-moment wiggle allowed before reverting
 
     var body: some View {
         GeometryReader { geo in
@@ -929,53 +1016,33 @@ struct PointsSlider: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in
                         if !isDragging {
-                            // Require the drag to begin on the knob (with generous slop)
-                            // so touching mid-track doesn't teleport the value.
-                            let knobCenterX = knobSize / 2 + CGFloat(value) / CGFloat(maxValue) * usable
-                            guard abs(g.startLocation.x - knobCenterX) <= knobSize else { return }
+                            // Track relative to where the knob was when the drag began, so
+                            // the knob follows the finger 1:1 (no teleport) and fast flicks
+                            // stay put — translation is reliable at any speed and survives
+                            // the panel's rotation, unlike an absolute-location hit test.
                             isDragging = true
-                            tickHaptic.prepare()
-                            stableValue = value
-                            lastChangeTime = Date()
+                            dragStartValue = value
+                            DragTickHaptics.shared.prepare()
                         }
-                        let x = max(0, min(usable, g.location.x - knobSize / 2))
-                        let p = x / max(usable, 1)
-                        let newValue = Int((p * CGFloat(maxValue)).rounded())
+                        let stepWidth = usable / CGFloat(maxValue)
+                        let delta = Int((g.translation.width / max(stepWidth, 1)).rounded())
+                        let newValue = min(maxValue, max(0, dragStartValue + delta))
                         if newValue != value {
-                            let now = Date()
-                            // If the previous value was held long enough, lock it in as stable
-                            if now.timeIntervalSince(lastChangeTime) >= stabilityDwell {
-                                stableValue = value
-                            }
                             value = newValue
-                            lastChangeTime = now
-                            tickHaptic.impactOccurred(intensity: 0.75)
-                            tickHaptic.prepare()
+                            DragTickHaptics.shared.tick(progress: Double(newValue) / Double(maxValue))
                         }
                     }
                     .onEnded { _ in
-                        // Ignore gestures that never grabbed the knob (started mid-track).
                         guard isDragging else { return }
-                        // Twitch protection: only revert to the previous stable value when the
-                        // final movement was BOTH quick and a big jump — small last-moment
-                        // wiggles (e.g. the finger drifting as it lifts) keep the value landed on.
-                        let dwell = Date().timeIntervalSince(lastChangeTime)
-                        let jumped = abs(value - stableValue)
-                        let committed: Int = (dwell < twitchWindow && jumped > twitchTolerance) ? stableValue : value
                         isDragging = false
-
-                        if committed != value {
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-                                value = committed
-                            }
-                        }
-                        if committed > 0 {
-                            onCommit(committed)
+                        // Commit exactly where the knob was released — no snap-back.
+                        if value > 0 {
+                            onCommit(value)
                         }
                     }
             )
         }
-        .onAppear { tickHaptic.prepare() }
+        .onAppear { DragTickHaptics.shared.prepare() }
     }
 }
 
