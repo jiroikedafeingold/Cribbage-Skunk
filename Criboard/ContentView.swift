@@ -866,6 +866,7 @@ struct PointsSlider: View {
     private let maxValue = 29
     private let twitchWindow: TimeInterval = 0.08   // ignore changes this close to release
     private let stabilityDwell: TimeInterval = 0.12  // a value held this long counts as "stable"
+    private let twitchTolerance = 2  // steps of last-moment wiggle allowed before reverting
 
     var body: some View {
         GeometryReader { geo in
@@ -928,6 +929,10 @@ struct PointsSlider: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in
                         if !isDragging {
+                            // Require the drag to begin on the knob (with generous slop)
+                            // so touching mid-track doesn't teleport the value.
+                            let knobCenterX = knobSize / 2 + CGFloat(value) / CGFloat(maxValue) * usable
+                            guard abs(g.startLocation.x - knobCenterX) <= knobSize else { return }
                             isDragging = true
                             tickHaptic.prepare()
                             stableValue = value
@@ -949,10 +954,14 @@ struct PointsSlider: View {
                         }
                     }
                     .onEnded { _ in
-                        // Twitch protection: if the value changed in the last fraction of a
-                        // second before release, prefer the previous stable value.
+                        // Ignore gestures that never grabbed the knob (started mid-track).
+                        guard isDragging else { return }
+                        // Twitch protection: only revert to the previous stable value when the
+                        // final movement was BOTH quick and a big jump — small last-moment
+                        // wiggles (e.g. the finger drifting as it lifts) keep the value landed on.
                         let dwell = Date().timeIntervalSince(lastChangeTime)
-                        let committed: Int = (dwell < twitchWindow) ? stableValue : value
+                        let jumped = abs(value - stableValue)
+                        let committed: Int = (dwell < twitchWindow && jumped > twitchTolerance) ? stableValue : value
                         isDragging = false
 
                         if committed != value {
@@ -1414,9 +1423,6 @@ struct WinnerOverlay: View {
     }
 
     private var winnerColor: Color { winnerTheme.primary }
-    private var winnerLabel: String {
-        "\(winnerName.uppercased()) WINS"
-    }
 
     var body: some View {
         ZStack {
@@ -1481,12 +1487,12 @@ struct WinnerOverlay: View {
                 }
 
                 VStack(spacing: 6) {
-                    Text(winnerLabel)
+                    Text("\(winnerName.uppercased()) WINS")
                         .font(.system(size: 13, weight: .black, design: .rounded))
                         .tracking(3.2)
                         .foregroundStyle(.white.opacity(0.75))
 
-                    Text(skunk.title)
+                    Text(LocalizedStringKey(skunk.title))
                         .font(.system(size: skunk == .double ? 36 : 44, weight: .black, design: .rounded))
                         .foregroundStyle(
                             LinearGradient(
@@ -1499,7 +1505,7 @@ struct WinnerOverlay: View {
                         .lineLimit(1)
                         .shadow(color: winnerColor.opacity(0.5), radius: 10)
 
-                    Text(skunk.subtitle)
+                    Text(LocalizedStringKey(skunk.subtitle))
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.6))
                         .italic()
