@@ -210,15 +210,38 @@ final class DragTickHaptics {
             )
         ]
         if p >= 0.85 {
-            // A deep, full-body thump stacked on the sharp tick — reads as "over 1.0".
+            // Toward the top, stack everything at full intensity for the hardest
+            // possible hit: a deep body transient, a short full-strength continuous
+            // rumble for weight, and a second sharp crack a hair later.
             events.append(
                 CHHapticEvent(
                     eventType: .hapticTransient,
                     parameters: [
                         CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0),
-                        CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.1)
+                        CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.05)
                     ],
                     relativeTime: 0
+                )
+            )
+            events.append(
+                CHHapticEvent(
+                    eventType: .hapticContinuous,
+                    parameters: [
+                        CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0),
+                        CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
+                    ],
+                    relativeTime: 0,
+                    duration: 0.09
+                )
+            )
+            events.append(
+                CHHapticEvent(
+                    eventType: .hapticTransient,
+                    parameters: [
+                        CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0),
+                        CHHapticEventParameter(parameterID: .hapticSharpness, value: 1.0)
+                    ],
+                    relativeTime: 0.015
                 )
             )
         }
@@ -377,6 +400,8 @@ struct ContentView: View {
     @AppStorage("movesData") private var movesData: String = "[]"
     @AppStorage("p1Confirm") private var p1Confirm: Bool = false
     @AppStorage("p2Confirm") private var p2Confirm: Bool = false
+    @AppStorage("p1PlusConfirm") private var p1PlusConfirm: Bool = false
+    @AppStorage("p2PlusConfirm") private var p2PlusConfirm: Bool = false
     @AppStorage("loserSymbolID") private var loserSymbolID: String = "skunk"
     @AppStorage("randomLoserChar") private var randomLoserChar: String = "🦨"
     @AppStorage("replayMoves") private var replayMoves: Bool = true
@@ -503,6 +528,8 @@ struct ContentView: View {
                 p2ColorID: $p2ColorID,
                 p1Confirm: $p1Confirm,
                 p2Confirm: $p2Confirm,
+                p1PlusConfirm: $p1PlusConfirm,
+                p2PlusConfirm: $p2PlusConfirm,
                 loserSymbolID: $loserSymbolID,
                 randomLoserChar: $randomLoserChar,
                 replayMoves: $replayMoves,
@@ -548,6 +575,7 @@ struct ContentView: View {
                 disabled: winner != nil || isReplaying,
                 canUndo: canUndo(.one),
                 requireConfirm: p1Confirm,
+                requirePlusConfirm: p1PlusConfirm,
                 onAdd: { amount in addPoints(amount, to: .one) },
                 onPlusOne: { addPoints(1, to: .one) },
                 onUndo: { undo(.one) }
@@ -575,6 +603,7 @@ struct ContentView: View {
                 disabled: winner != nil || isReplaying,
                 canUndo: canUndo(.two),
                 requireConfirm: p2Confirm,
+                requirePlusConfirm: p2PlusConfirm,
                 onAdd: { amount in addPoints(amount, to: .two) },
                 onPlusOne: { addPoints(1, to: .two) },
                 onUndo: { undo(.two) }
@@ -599,6 +628,7 @@ struct ContentView: View {
                 disabled: winner != nil || isReplaying,
                 canUndo: canUndo(.two),
                 requireConfirm: p2Confirm,
+                requirePlusConfirm: p2PlusConfirm,
                 onAdd: { amount in addPoints(amount, to: .two) },
                 onPlusOne: { addPoints(1, to: .two) },
                 onUndo: { undo(.two) }
@@ -625,6 +655,7 @@ struct ContentView: View {
                 disabled: winner != nil || isReplaying,
                 canUndo: canUndo(.one),
                 requireConfirm: p1Confirm,
+                requirePlusConfirm: p1PlusConfirm,
                 onAdd: { amount in addPoints(amount, to: .one) },
                 onPlusOne: { addPoints(1, to: .one) },
                 onUndo: { undo(.one) }
@@ -748,6 +779,7 @@ struct PlayerPanel: View {
     let disabled: Bool
     let canUndo: Bool
     let requireConfirm: Bool
+    let requirePlusConfirm: Bool
     let onAdd: (Int) -> Void
     let onPlusOne: () -> Void
     let onUndo: () -> Void
@@ -755,45 +787,118 @@ struct PlayerPanel: View {
     @State private var pending: Int = 0
     @State private var sliderIsDragging: Bool = false
 
-    // Rapid, repeated +1 taps accumulate into a visible running count.
-    @State private var tapStreak: Int = 0
-    @State private var streakResetTask: Task<Void, Never>? = nil
+    // +1 taps accumulate here. With "confirm after +1" the score isn't applied
+    // until the batch is committed (by tapping the settled number, or auto-accept);
+    // otherwise the score is added per tap and this is just the running display count.
+    @State private var plusPending: Int = 0
+    @State private var plusSettled: Bool = false   // confirm mode: taps paused, a tap now commits
+    @State private var plusTask: Task<Void, Never>? = nil
+
+    // Firmer feedback for the +1 button.
+    @State private var plusHeavy = UIImpactFeedbackGenerator(style: .heavy)
+    @State private var plusRigid = UIImpactFeedbackGenerator(style: .rigid)
 
     // Drives the slow, refined "breathing" glow while a number is on show.
     @State private var glowPulse: Bool = false
+
+    private let plusSettleDelay: TimeInterval = 0.8      // pause after which a tap commits
+    private let plusAutoAcceptDelay: TimeInterval = 2.2  // total idle before auto-accept
 
     // True when the slider has settled on a value and we're waiting for the user to confirm it.
     private var awaitingConfirm: Bool {
         requireConfirm && pending > 0 && !sliderIsDragging
     }
 
+    // True when +1 taps are staged and waiting to be committed.
+    private var awaitingPlusConfirm: Bool {
+        requirePlusConfirm && plusPending > 0
+    }
+
     // The number rendered on the combined left button.
     private var displayValue: Int {
         if sliderIsDragging || awaitingConfirm { return pending }
-        if tapStreak > 1 { return tapStreak }
+        if plusPending > 0 { return plusPending }
         return 1
     }
 
     // The button reads bright/high-contrast whenever it shows anything but "+1".
     private var showingElevatedValue: Bool { displayValue != 1 }
-    // Identical high-contrast treatment during the drag and in the settled state
-    // that shows a number, so the look never shifts between the two.
-    private var highlighted: Bool { showingElevatedValue || awaitingConfirm }
+    // Identical high-contrast treatment during a drag, the slider's settled state,
+    // and a staged +1 batch, so the look never shifts between them.
+    private var highlighted: Bool { showingElevatedValue || awaitingConfirm || awaitingPlusConfirm }
 
-    // Track rapid +1 taps: each tap within a second of the last keeps the streak
-    // climbing; a pause longer than a second resets the display back to "+1".
-    private func registerSequentialTap() {
-        streakResetTask?.cancel()
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
-            tapStreak += 1
+    // A firmer press than the old light tick.
+    private func firePlusHaptic() {
+        plusHeavy.impactOccurred(intensity: 1.0)
+        plusHeavy.prepare()
+    }
+
+    // A heavier "locked in" thump for a commit.
+    private func fireCommitHaptic() {
+        plusHeavy.impactOccurred(intensity: 1.0)
+        plusRigid.impactOccurred(intensity: 1.0)
+        plusHeavy.prepare(); plusRigid.prepare()
+    }
+
+    private func handlePlusTap() {
+        if requirePlusConfirm {
+            // Once the batch has settled, a tap confirms it rather than adding more.
+            if plusSettled {
+                commitPlus()
+                return
+            }
+            firePlusHaptic()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { plusPending += 1 }
+            schedulePlusConfirm()
+        } else {
+            // Add immediately; the running count is display-only.
+            firePlusHaptic()
+            onPlusOne()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { plusPending += 1 }
+            scheduleStreakReset()
         }
-        streakResetTask = Task { @MainActor in
+    }
+
+    // Confirm mode: after a short pause the batch becomes tap-to-commit; after a
+    // longer idle it auto-accepts on its own.
+    private func schedulePlusConfirm() {
+        plusTask?.cancel()
+        plusSettled = false
+        plusTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(plusSettleDelay))
+            guard !Task.isCancelled else { return }
+            plusSettled = true
+            try? await Task.sleep(for: .seconds(plusAutoAcceptDelay - plusSettleDelay))
+            guard !Task.isCancelled else { return }
+            commitPlus()
+        }
+    }
+
+    // Non-confirm mode: just fade the running count away; the score is already in.
+    private func scheduleStreakReset() {
+        plusTask?.cancel()
+        plusTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) {
-                tapStreak = 0
-            }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { plusPending = 0 }
         }
+    }
+
+    private func commitPlus() {
+        plusTask?.cancel()
+        let amount = plusPending
+        plusSettled = false
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { plusPending = 0 }
+        if amount > 0 {
+            onAdd(amount)
+            fireCommitHaptic()
+        }
+    }
+
+    private func cancelPlus() {
+        plusTask?.cancel()
+        plusSettled = false
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { plusPending = 0 }
     }
 
     var body: some View {
@@ -816,13 +921,9 @@ struct PlayerPanel: View {
                         let value = pending
                         onAdd(value)
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { pending = 0 }
-                        let gen = UIImpactFeedbackGenerator(style: .medium)
-                        gen.impactOccurred()
+                        fireCommitHaptic()
                     } else if !sliderIsDragging {
-                        onPlusOne()
-                        registerSequentialTap()
-                        let gen = UIImpactFeedbackGenerator(style: .light)
-                        gen.impactOccurred()
+                        handlePlusTap()
                     }
                 } label: {
                     Text("+\(displayValue)")
@@ -851,11 +952,11 @@ struct PlayerPanel: View {
                         // refined "breathing" bloom while a number is on show.
                         .shadow(color: primary.opacity(highlighted ? 0.75 : 0.0), radius: 10)
                         .shadow(
-                            color: primary.opacity(showingElevatedValue ? (glowPulse ? 0.9 : 0.35) : 0.0),
-                            radius: showingElevatedValue ? (glowPulse ? 24 : 12) : 0
+                            color: primary.opacity(highlighted ? (glowPulse ? 0.9 : 0.35) : 0.0),
+                            radius: highlighted ? (glowPulse ? 24 : 12) : 0
                         )
                         .animation(.easeInOut(duration: 0.22), value: highlighted)
-                        .onChange(of: showingElevatedValue) { _, isShowing in
+                        .onChange(of: highlighted) { _, isShowing in
                             if isShowing {
                                 withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
                                     glowPulse = true
@@ -873,6 +974,7 @@ struct PlayerPanel: View {
                 // by the action's `!sliderIsDragging` guard.
                 .disabled(disabled)
                 .opacity(disabled ? 0.4 : 1.0)
+                .onAppear { plusHeavy.prepare(); plusRigid.prepare() }
 
                 // Slider (flex)
                 PointsSlider(
@@ -899,8 +1001,11 @@ struct PlayerPanel: View {
                 // Undo (also clears any pending confirmation)
                 Button {
                     if pending > 0 {
-                        // Cancel a pending confirmation instead of undoing the last move
+                        // Cancel a pending slider confirmation instead of undoing
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { pending = 0 }
+                    } else if awaitingPlusConfirm {
+                        // Cancel a staged +1 batch before it's committed
+                        cancelPlus()
                     } else {
                         onUndo()
                     }
@@ -917,8 +1022,8 @@ struct PlayerPanel: View {
                                 .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
                         )
                 }
-                .disabled((!canUndo && pending == 0) || disabled)
-                .opacity(((!canUndo && pending == 0) || disabled) ? 0.30 : 1.0)
+                .disabled((!canUndo && pending == 0 && !awaitingPlusConfirm) || disabled)
+                .opacity(((!canUndo && pending == 0 && !awaitingPlusConfirm) || disabled) ? 0.30 : 1.0)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -1778,6 +1883,8 @@ struct SettingsSheet: View {
     @Binding var p2ColorID: String
     @Binding var p1Confirm: Bool
     @Binding var p2Confirm: Bool
+    @Binding var p1PlusConfirm: Bool
+    @Binding var p2PlusConfirm: Bool
     @Binding var loserSymbolID: String
     @Binding var randomLoserChar: String
     @Binding var replayMoves: Bool
@@ -1802,6 +1909,7 @@ struct SettingsSheet: View {
                     }
                     ColorSwatchRow(selection: $p1ColorID, opposing: p2ColorID)
                     Toggle("Confirm score after release", isOn: $p1Confirm)
+                    Toggle("Confirm score after +1", isOn: $p1PlusConfirm)
                 } header: {
                     HStack(spacing: 8) {
                         Circle()
@@ -1821,6 +1929,7 @@ struct SettingsSheet: View {
                     }
                     ColorSwatchRow(selection: $p2ColorID, opposing: p1ColorID)
                     Toggle("Confirm score after release", isOn: $p2Confirm)
+                    Toggle("Confirm score after +1", isOn: $p2PlusConfirm)
                 } header: {
                     HStack(spacing: 8) {
                         Circle()
